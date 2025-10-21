@@ -1,0 +1,29 @@
+model:
+  name: "dinov3_vitl16"
+  architecture: "vit_large"
+  patch_size: 16
+  embed_dim: 1024
+  num_heads: 16
+  depth: 24
+  
+  weights:
+    url: "https://dl.fbaipublicfiles.com/dinov3/dinov3_vitl16_pretrain.pth"
+    filename: "dinov3_vitl16_pretrain.pth"
+
+preprocessing:
+  input_size: 224
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  interpolation: "bicubic"
+
+features:
+  output_type: "cls_token"
+  normalize: true
+
+runtime:
+  device: "cuda"
+  dtype: "float32"
+
+topics:
+  image_input: "image_rgb"
+  features_output: "image_features"
