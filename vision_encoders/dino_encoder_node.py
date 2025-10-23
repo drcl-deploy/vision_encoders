@@ -1,136 +1,87 @@
 #!/usr/bin/env python3
 import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import Image
-from std_msgs.msg import Float32MultiArray
-from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy
-import yaml
-import os
 import torch
-import torchvision.transforms as T
-import numpy as np
-from PIL import Image as PILImage
-from ament_index_python.packages import get_package_share_directory
+from vision_encoders.base_encoder_node import BaseEncoderNode
 
-class DinoEncoderNode(Node):
+
+class DinoEncoderNode(BaseEncoderNode):
+    """DINOv3 encoder node with all model-specific logic"""
+    
     def __init__(self, config_name):
-        super().__init__('dino_encoder_node')
-        
-        # Load config
-        pkg_share = get_package_share_directory('vision_encoders')
-        config_path = os.path.join(pkg_share, 'config', f'{config_name}.yaml')
-        
-        if not os.path.exists(config_path):
-            self.get_logger().error(f"Config not found: {config_path}")
-            raise FileNotFoundError(config_path)
-        
-        with open(config_path, 'r') as f:
-            self.cfg = yaml.safe_load(f)
-        
-        self.get_logger().info(f"Loaded config: {config_name}")
-        
-        # QoS
-        qos = QoSProfile(
-            history=QoSHistoryPolicy.KEEP_LAST, depth=10,
-            reliability=QoSReliabilityPolicy.RELIABLE
-        )
-        
-        # Subscribers and publishers
-        self.image_sub = self.create_subscription(
-            Image, 
-            self.cfg['topics']['image_input'], 
-            self.image_callback, 
-            qos
-        )
-        
-        self.feature_pub = self.create_publisher(
-            Float32MultiArray, 
-            self.cfg['topics']['features_output'], 
-            qos
-        )
-        
-        # Load model
-        from vision_encoders.model_loader import ModelLoader
-        
-        loader = ModelLoader(self.cfg)
-        self.model, self.device = loader.load_dinov3()
-        
-        # Preprocessing
-        self.transform = self._build_transform()
-        
-        self.get_logger().info(f"DINO encoder ready: {self.cfg['model']['name']}")
+        super().__init__(node_name='dino_encoder_node', config_name=config_name)
     
-    def _build_transform(self):
-        prep = self.cfg['preprocessing']
-        return T.Compose([
-            T.Resize(prep['input_size'], interpolation=T.InterpolationMode.BICUBIC),
-            T.CenterCrop(prep['input_size']),
-            T.ToTensor(),
-            T.Normalize(mean=prep['mean'], std=prep['std'])
-        ])
+    def _load_model(self):
+        """Load DINOv3 model from local repository"""
+        model_name = self.cfg['model']['model_name']
+        model_path = self.cfg['model']['model_path']
+        repo_path = self.cfg['model']['repo_path']
+        
+        self.get_logger().info(f"Loading {model_name} from {repo_path}")
+        
+        # Load model architecture
+        model = torch.hub.load(repo_path, model_name, source='local', pretrained=False)
+        
+        # Load pretrained weights
+        self.get_logger().info(f"Loading weights from {model_path}")
+        state_dict = torch.load(model_path, map_location='cpu')
+        model.load_state_dict(state_dict)
+        
+        # Move to device and eval mode
+        model.to(self.device)
+        model.eval()
+        
+        # Log model info
+        patch_size = getattr(model, 'patch_size', 16)
+        embed_dim = getattr(model, 'embed_dim', None)
+        self.get_logger().info(f"Patch size: {patch_size}")
+        self.get_logger().info(f"Embedding dimension: {embed_dim}")
+        
+        return model
     
-    def image_callback(self, msg: Image):
-        try:
-            # Decode
-            h, w = msg.height, msg.width
-            if msg.encoding != 'rgb8':
-                self.get_logger().warn(f"Unsupported encoding: {msg.encoding}")
-                return
-            
-            rgb = np.frombuffer(msg.data, dtype=np.uint8).reshape((h, w, 3))
-            
-            # Preprocess
-            pil_img = PILImage.fromarray(rgb)
-            tensor = self.transform(pil_img).unsqueeze(0).to(self.device)
-            
-            # Inference
-            with torch.no_grad():
-                output = self.model(tensor)
-                
-                output_type = self.cfg['features']['output_type']
-                if output_type == 'cls_token':
-                    features = output[:, 0]
-                elif output_type == 'avg_pool':
-                    features = output[:, 1:].mean(dim=1)
-                else:
-                    features = output
-                
-                if self.cfg['features'].get('normalize', False):
-                    features = torch.nn.functional.normalize(features, dim=-1)
-            
-            # Publish
-            feat_array = features.cpu().numpy().flatten()
-            feat_msg = Float32MultiArray()
-            feat_msg.data = feat_array.tolist()
-            self.feature_pub.publish(feat_msg)
-            
-        except Exception as e:
-            self.get_logger().error(f"Inference error: {e}")
+    def _extract_features(self, img_tensor):
+        """Extract DINOv3 patch features from intermediate layers"""
+        n_layers = self.cfg['model'].get('n_layers', 12)
+        
+        self.model.eval()
+        
+        with torch.inference_mode():
+            feats = self.model.get_intermediate_layers(
+                img_tensor,
+                n=range(n_layers),
+                reshape=True,
+                norm=True
+            )
+            # Return last layer features: [embed_dim, H, W]
+            last_layer = feats[-1].squeeze().detach().cpu()
+        return last_layer
 
 
 def main(args=None):
     import argparse
     
+    # Parse arguments BEFORE rclpy.init
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '--config', 
-        type=str, 
-        default='dinov3_vits16',
-        help='Model config name (without .yaml extension)'
-    )
-    cli_args, ros_args = parser.parse_known_args()
+    parser.add_argument('--config', type=str, default='dinov3',
+                       help='Config file name (without .yaml extension)')
+    parsed_args, remaining = parser.parse_known_args()
     
-    rclpy.init(args=ros_args)
-    node = DinoEncoderNode(config_name=cli_args.config)
+    # Initialize ROS with remaining args
+    rclpy.init(args=remaining)
     
     try:
+        node = DinoEncoderNode(config_name=parsed_args.config)
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        print(f"Node failed: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
     main()
+

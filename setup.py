@@ -15,22 +15,12 @@ setup(
         (os.path.join('share', package_name, 'config'),
             glob('vision_encoders/config/*.yaml')),
     ],
-    install_requires=[
-        'torch==2.8.0',
-        'torchvision==0.15.0',
-        'pillow==9.0.0',
-        'requests==2.28.0',
-        'tqdm==4.64.0',
-        'numpy==1.21.0',
-    ],
+    install_requires=['setuptools'],  # ONLY setuptools here!
     zip_safe=True,
     maintainer='Your Name',
     maintainer_email='you@example.com',
     description='Vision encoder nodes for multiple architectures',
     license='Apache-2.0',
-    extras_require={
-        'test': ['pytest'],
-    },
     entry_points={
         'console_scripts': [
             'dino_encoder_node = vision_encoders.dino_encoder_node:main',

@@ -1,14 +1,8 @@
 model:
-  name: "dinov3_vitb16"
-  architecture: "vit_base"
-  patch_size: 16
-  embed_dim: 768
-  num_heads: 12
-  depth: 12
-  
-  weights:
-    url: "https://dl.fbaipublicfiles.com/dinov3/dinov3_vitb16_pretrain.pth"
-    filename: "dinov3_vitb16_pretrain.pth"
+  name: 'dinov3_vits16'  # or dinov3_vitb16, dinov3_vitl16, etc.
+  repo_path: '/home/learning/shravan/dinov3'
+  model_path: '/home/learning/shravan/ros2_ws/src/vision_encoders/vision_encoders/models/dinov3_vits16_pretrain.pth'  # Adjust path
+  device: 'cuda'  # or 'cpu'
 
 preprocessing:
   input_size: 224
@@ -27,3 +21,4 @@ runtime:
 topics:
   image_input: "image_rgb"
   features_output: "image_features"
+
