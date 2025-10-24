@@ -16,26 +16,16 @@ class DinoEncoderNode(BaseEncoderNode):
         model_path = self.cfg['model']['model_path']
         repo_path = self.cfg['model']['repo_path']
         
-        self.get_logger().info(f"Loading {model_name} from {repo_path}")
-        
         # Load model architecture
         model = torch.hub.load(repo_path, model_name, source='local', pretrained=False)
         
         # Load pretrained weights
-        self.get_logger().info(f"Loading weights from {model_path}")
         state_dict = torch.load(model_path, map_location='cpu')
         model.load_state_dict(state_dict)
         
         # Move to device and eval mode
         model.to(self.device)
         model.eval()
-        
-        # Log model info
-        patch_size = getattr(model, 'patch_size', 16)
-        embed_dim = getattr(model, 'embed_dim', None)
-        self.get_logger().info(f"Patch size: {patch_size}")
-        self.get_logger().info(f"Embedding dimension: {embed_dim}")
-        
         return model
     
     def _extract_features(self, img_tensor):

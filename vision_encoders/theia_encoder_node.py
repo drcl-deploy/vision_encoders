@@ -16,15 +16,10 @@ class TheiaEncoderNode(BaseEncoderNode):
         """Load Theia model from Hugging Face"""
         model_name = self.cfg['model']['model_name']
         
-        self.get_logger().info(f"Loading Theia model: {model_name}")
-        
         # Load Theia model
         model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
         model = model.to(self.device)
         model.eval()
-        
-        self.get_logger().info(f"Theia model loaded successfully")
-        
         return model
     
     def _preprocess_image(self, pil_img):
