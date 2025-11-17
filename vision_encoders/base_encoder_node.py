@@ -101,14 +101,20 @@ class BaseEncoderNode(Node, ABC):
                 return
             
             rgb = np.frombuffer(inner_img.data, dtype=np.uint8).reshape((h, w, 3))
+            print("ROS2 img shape:", rgb.shape)
+            print("ROS2 img dtype:", rgb.dtype)
+            print("Top-left pixel RGB:", rgb[0,0])
+            print("Pixel (15,20) RGB:", rgb[15,20])
+            for i, c in enumerate(['R','G','B']):
+                print(f"Channel {c}: min {rgb[:,:,i].min()}, max {rgb[:,:,i].max()}, mean {rgb[:,:,i].mean():.2f}")
+            Image.fromarray(rgb).save("ros2_topic_debug.png")
             pil_img = Image.fromarray(rgb)
 
             # Preprocess (model-specific)
             img_tensor = self._preprocess_image(pil_img)
-            
+
             # Extract features (model-specific)
             features = self._extract_features(img_tensor)
-
             # Publish features
             self._publish_features(features)
             

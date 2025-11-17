@@ -16,6 +16,7 @@ class TheiaEncoderNode(BaseEncoderNode):
     
     def __init__(self, config_name='theia'):
         super().__init__(node_name='theia_encoder_node', config_name=config_name)
+        # self.image_callback(None)  # For testing immediately upon startup
     
     def _load_model(self):
         """Load Theia model from Hugging Face"""
@@ -88,103 +89,123 @@ class TheiaEncoderNode(BaseEncoderNode):
             spatial_feats = spatial_feats.squeeze(0).flatten().cpu()  # (768,)
         return spatial_feats
 
-    def compare_features(self):
-        isaac_obs = np.load('/home/learning/shravan/fcrl/debug_vision_encoder/theia_features_isaac_20251107_131214.npy')
-        isaac_features = isaac_obs[-768:]  # Last 768 elements (adjust if different)
+    # def image_callback(self, msg: ImageRGB):
+    #     """Common callback logic for all encoders"""
+    #     try:
+    #         img_np = np.load('/home/shravan447/fcrl/collected_vision_test/compare_rgb_image.npy')
+    #         pil_img = Image.fromarray(img_np)
+    #         # Preprocess (model-specific)
+    #         img_tensor = self._preprocess_image(pil_img)
 
-        print(f"IsaacSim features shape: {isaac_features.shape}")
+    #         # Extract features (model-specific)
+    #         features = self._extract_features(img_tensor)
+    #         np.save("/home/shravan447/fcrl/collected_vision_test/features_ros2_mjc.npy", features.numpy())
+    #         self.compare_features()
+    #         # self._publish_features(features)
+            
+    #     except Exception as e:
+    #         self.get_logger().error(f"Inference error: {e}")
+    #         import traceback
+    #         traceback.print_exc()
 
-        # # Load ROS2 features
-        # ros_features = np.load('theia_features_MuJoCo.npy')
-        # print(f"ROS2 features shape: {ros_features.shape}")
+    # def compare_features(self):
+    #     isaac_obs = np.load('/home/shravan447/fcrl/collected_vision_test/features_ros2.npy')
+    #     isaac_features = isaac_obs[-768:]  # Last 768 elements (adjust if different)
+    #     isaac_features = isaac_features.flatten()
 
-        # # Ensure shapes match
-        # if isaac_features.shape != ros_features.shape:
-        #     print(f"\n❌ Shape mismatch!")
-        #     print(f"   IsaacSim: {isaac_features.shape}")
-        #     print(f"   ROS2:     {ros_features.shape}")
-        #     exit(1)
+    #     print(f"IsaacSim features shape: {isaac_features.shape}")
 
-        # print("\n" + "="*70)
-        # print("🔍 FEATURE COMPARISON")
-        # print("="*70)
+    #     # Load ROS2 features
+    #     ros_features = np.load('/home/shravan447/fcrl/collected_vision_test/features_ros2_mjc.npy')
+    #     print(f"ROS2 features shape: {ros_features.shape}")
 
-        # Statistics
-        print(f"\nIsaacSim Features:")
-        print(f"  L2 Norm: {np.linalg.norm(isaac_features):.6f}")
-        print(f"  Mean: {isaac_features.mean():.6f}")
-        print(f"  Std: {isaac_features.std():.6f}")
-        print(f"  Range: [{isaac_features.min():.6f}, {isaac_features.max():.6f}]")
+    #     # Ensure shapes match
+    #     if isaac_features.shape != ros_features.shape:
+    #         print(f"\n❌ Shape mismatch!")
+    #         print(f"   IsaacSim: {isaac_features.shape}")
+    #         print(f"   ROS2:     {ros_features.shape}")
+    #         exit(1)
 
-        # print(f"\nROS2 Features:")
-        # print(f"  L2 Norm: {np.linalg.norm(ros_features):.6f}")
-        # print(f"  Mean: {ros_features.mean():.6f}")
-        # print(f"  Std: {ros_features.std():.6f}")
-        # print(f"  Range: [{ros_features.min():.6f}, {ros_features.max():.6f}]")
+    #     print("\n" + "="*70)
+    #     print("🔍 FEATURE COMPARISON")
+    #     print("="*70)
 
-        # # Cosine similarity
-        # dot_product = np.dot(isaac_features, ros_features)
-        # norm_isaac = np.linalg.norm(isaac_features)
-        # norm_ros = np.linalg.norm(ros_features)
-        # cosine_sim = dot_product / (norm_isaac * norm_ros)
+    #     # Statistics
+    #     print(f"\nIsaacSim Features:")
+    #     print(f"  L2 Norm: {np.linalg.norm(isaac_features):.6f}")
+    #     print(f"  Mean: {isaac_features.mean():.6f}")
+    #     print(f"  Std: {isaac_features.std():.6f}")
+    #     print(f"  Range: [{isaac_features.min():.6f}, {isaac_features.max():.6f}]")
 
-        # # MSE
-        # mse = np.mean((isaac_features - ros_features) ** 2)
+    #     print(f"\nROS2 Features:")
+    #     print(f"  L2 Norm: {np.linalg.norm(ros_features):.6f}")
+    #     print(f"  Mean: {ros_features.mean():.6f}")
+    #     print(f"  Std: {ros_features.std():.6f}")
+    #     print(f"  Range: [{ros_features.min():.6f}, {ros_features.max():.6f}]")
 
-        # # Element-wise metrics
-        # abs_diff = np.abs(isaac_features - ros_features)
-        # max_abs_diff = np.max(abs_diff)
-        # mean_abs_diff = np.mean(abs_diff)
+    #     # Cosine similarity
+    #     dot_product = np.dot(isaac_features, ros_features)
+    #     norm_isaac = np.linalg.norm(isaac_features)
+    #     norm_ros = np.linalg.norm(ros_features)
+    #     cosine_sim = dot_product / (norm_isaac * norm_ros)
 
-        # # Correlation
-        # correlation = np.corrcoef(isaac_features, ros_features)[0, 1]
+    #     # MSE
+    #     mse = np.mean((isaac_features - ros_features) ** 2)
 
-        # print("\n" + "="*70)
-        # print("📊 SIMILARITY METRICS")
-        # print("="*70)
+    #     # Element-wise metrics
+    #     abs_diff = np.abs(isaac_features - ros_features)
+    #     max_abs_diff = np.max(abs_diff)
+    #     mean_abs_diff = np.mean(abs_diff)
 
-        # print(f"\n🎯 Cosine Similarity: {cosine_sim:.8f}")
-        # if cosine_sim > 0.999:
-        #     print("   ✅ EXCELLENT (> 0.999) - Nearly identical!")
-        # elif cosine_sim > 0.99:
-        #     print("   ✅ PASS (> 0.99) - Very good match")
-        # elif cosine_sim > 0.95:
-        #     print("   ⚠️  ACCEPTABLE (> 0.95) - Minor differences")
-        # else:
-        #     print("   ❌ FAIL (< 0.95) - Significant mismatch")
+    #     # Correlation
+    #     correlation = np.corrcoef(isaac_features, ros_features)[0, 1]
 
-        # print(f"\n📏 Mean Squared Error: {mse:.8f}")
-        # print(f"📏 Max Absolute Diff: {max_abs_diff:.6f}")
-        # print(f"📏 Mean Absolute Diff: {mean_abs_diff:.6f}")
-        # print(f"📐 Correlation: {correlation:.8f}")
+    #     print("\n" + "="*70)
+    #     print("📊 SIMILARITY METRICS")
+    #     print("="*70)
 
-        # # Worst mismatches
-        # print(f"\n🔬 Top 5 Worst Mismatches:")
-        # worst_idx = np.argsort(abs_diff)[-5:][::-1]
-        # for i, idx in enumerate(worst_idx, 1):
-        #     print(f"   {i}. Index {idx}: Isaac={isaac_features[idx]:.6f}, "
-        #         f"ROS={ros_features[idx]:.6f}, Diff={abs_diff[idx]:.6f}")
+    #     print(f"\n🎯 Cosine Similarity: {cosine_sim:.8f}")
+    #     if cosine_sim > 0.999:
+    #         print("   ✅ EXCELLENT (> 0.999) - Nearly identical!")
+    #     elif cosine_sim > 0.99:
+    #         print("   ✅ PASS (> 0.99) - Very good match")
+    #     elif cosine_sim > 0.95:
+    #         print("   ⚠️  ACCEPTABLE (> 0.95) - Minor differences")
+    #     else:
+    #         print("   ❌ FAIL (< 0.95) - Significant mismatch")
 
-        # # Final verdict
-        # print("\n" + "="*70)
-        # print("🏁 FINAL VERDICT")
-        # print("="*70)
+    #     print(f"\n📏 Mean Squared Error: {mse:.8f}")
+    #     print(f"📏 Max Absolute Diff: {max_abs_diff:.6f}")
+    #     print(f"📏 Mean Absolute Diff: {mean_abs_diff:.6f}")
+    #     print(f"📐 Correlation: {correlation:.8f}")
 
-        # if cosine_sim > 0.99:
-        #     print("✅ VISION ENCODER MATCHES!")
-        #     print("   → ROS2 Theia encoder produces same features as IsaacSim")
-        #     print("   → Problem is NOT in vision encoding")
-        #     print("   → Move to Test 2: Frozen Observation Test")
-        #     print("   → Debug dynamics/observation construction instead")
-        # else:
-        #     print("❌ VISION ENCODER MISMATCH DETECTED")
-        #     print("   → Debug checklist:")
-        #     print("     1. Verify same model weights")
-        #     print("     2. Check preprocessing steps")
-        #     print("     3. Ensure interpolate_pos_encoding=True")
-        #     print("     4. Verify feature extraction (no reshape/transpose)")
+    #     # Worst mismatches
+    #     print(f"\n🔬 Top 5 Worst Mismatches:")
+    #     worst_idx = np.argsort(abs_diff)[-5:][::-1]
+    #     for i, idx in enumerate(worst_idx, 1):
+    #         print(f"   {i}. Index {idx}: Isaac={isaac_features[idx]:.6f}, "
+    #             f"ROS={ros_features[idx]:.6f}, Diff={abs_diff[idx]:.6f}")
 
-        # print("="*70)
+    #     # Final verdict
+    #     print("\n" + "="*70)
+    #     print("🏁 FINAL VERDICT")
+    #     print("="*70)
+
+    #     if cosine_sim > 0.99:
+    #         print("✅ VISION ENCODER MATCHES!")
+    #         print("   → ROS2 Theia encoder produces same features as IsaacSim")
+    #         print("   → Problem is NOT in vision encoding")
+    #         print("   → Move to Test 2: Frozen Observation Test")
+    #         print("   → Debug dynamics/observation construction instead")
+    #     else:
+    #         print("❌ VISION ENCODER MISMATCH DETECTED")
+    #         print("   → Debug checklist:")
+    #         print("     1. Verify same model weights")
+    #         print("     2. Check preprocessing steps")
+    #         print("     3. Ensure interpolate_pos_encoding=True")
+    #         print("     4. Verify feature extraction (no reshape/transpose)")
+
+    #     print("="*70)
 
 
 def main(args=None):
