@@ -23,8 +23,9 @@ setup(
     license='Apache-2.0',
     entry_points={
         'console_scripts': [
-            'dino_encoder_node = vision_encoders.dino_encoder_node:main',
+            'dino_encoder_node = vision_encoders.dino_encoder_node_child:main',
             'theia_encoder_node = vision_encoders.theia_encoder_node:main',
+            'debug_rgb_publisher = vision_encoders.debug_rgb_publisher_node:main',
         ],
     },
 )

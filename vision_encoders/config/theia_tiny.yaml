@@ -1,7 +1,7 @@
 model:
-  model_name: "theaiinstitute/theia-tiny-patch16-224-cdiv"
+  model_name: "theaiinstitute/theia-tiny-patch16-224-cddsv"
   device: 'cuda'
-  input_size: 224
+  input_size: 32
   mean: [0.485, 0.456, 0.406]
   std: [0.229, 0.224, 0.225]
 

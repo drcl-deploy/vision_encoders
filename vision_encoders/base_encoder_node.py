@@ -60,7 +60,7 @@ class BaseEncoderNode(Node, ABC):
 
 
     def _preprocess_image(self, pil_img):
-        input_size = self.cfg['model'].get('input_size', 224)
+        input_size = self.cfg['model'].get('input_size', 32)
         mean = self.cfg['model'].get('mean', [0.485, 0.456, 0.406])
         std = self.cfg['model'].get('std', [0.229, 0.224, 0.225])
         
@@ -84,7 +84,6 @@ class BaseEncoderNode(Node, ABC):
         """Load the model - implemented by child classes"""
         pass
 
-    
     @abstractmethod
     def _extract_features(self, img_tensor):
         """Extract features - implemented by child classes"""
@@ -103,12 +102,13 @@ class BaseEncoderNode(Node, ABC):
             
             rgb = np.frombuffer(inner_img.data, dtype=np.uint8).reshape((h, w, 3))
             pil_img = Image.fromarray(rgb)
-            
+
             # Preprocess (model-specific)
             img_tensor = self._preprocess_image(pil_img)
             
             # Extract features (model-specific)
             features = self._extract_features(img_tensor)
+
             # Publish features
             self._publish_features(features)
             
