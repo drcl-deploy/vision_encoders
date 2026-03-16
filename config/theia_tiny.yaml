@@ -1,0 +1,16 @@
+theia_tiny_node:
+  ros__parameters:
+    # model
+    hf_name: theaiinstitute/theia-tiny-patch16-224-cdiv
+    model_path: models/theia_tiny.onnx
+    opset: 17
+
+    # image
+    cam_width: 57 #640
+    cam_height: 32 #480
+
+    # node
+    image_topic: /head_camera
+    embedding_topic: /theia_embedding
+    resolution: 720p
+    use_gpu: true
