@@ -27,13 +27,19 @@ set_target_properties(onnxruntime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_ROOT}/include"
 )
 
-# Theia Tiny Node
+# Theia Tiny Node (DDS subscriber — requires matching CycloneDDS versions)
 add_executable(theia_tiny_node src/theia_tiny_node.cpp)
 target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
 target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
 ament_target_dependencies(theia_tiny_node rclcpp std_msgs unitree_go)
 
-install(TARGETS theia_tiny_node
+# Theia Tiny TCP Node (TCP receiver — bypasses DDS for camera frames)
+add_executable(theia_tiny_tcp_node src/theia_tiny_tcp_node.cpp)
+target_compile_features(theia_tiny_tcp_node PUBLIC cxx_std_17)
+target_link_libraries(theia_tiny_tcp_node onnxruntime ${OpenCV_LIBS})
+ament_target_dependencies(theia_tiny_tcp_node rclcpp std_msgs)
+
+install(TARGETS theia_tiny_node theia_tiny_tcp_node
   DESTINATION lib/${PROJECT_NAME})
 
 # Install ONNX Runtime shared libs alongside the node

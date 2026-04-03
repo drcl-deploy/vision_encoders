@@ -1,0 +1,18 @@
+theia_tiny_tcp_node:
+  ros__parameters:
+    # model
+    hf_name: theaiinstitute/theia-tiny-patch16-224-cdiv
+    model_path: models/theia_tiny.onnx
+    opset: 17
+
+    # image
+    cam_width: 57 #640
+    cam_height: 32 #480
+
+    # TCP camera source (camera_streamer.py on Orin)
+    orin_ip: "192.168.123.164"
+    orin_port: 5555
+
+    # node
+    embedding_topic: /theia_embedding
+    use_gpu: true
