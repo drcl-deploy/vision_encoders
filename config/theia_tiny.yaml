@@ -5,12 +5,16 @@ theia_tiny_node:
     model_path: models/theia_tiny.onnx
     opset: 17
 
-    # image
-    cam_width: 57 #640
-    cam_height: 32 #480
+    # image (must match what the ONNX model was exported at)
+    cam_width: 640
+    cam_height: 480
+
+    # TCP camera source — matches wire format of scripts/camera_streamer.py
+    # and the sim's head-camera TCP server in unitree_sdk2_bridge.h.
+    # Real Orin:  192.168.123.164
+    # Sim:        127.0.0.1
+    camera_ip: "127.0.0.1"
+    camera_port: 5555
 
     # node
-    image_topic: /head_camera
     embedding_topic: /theia_embedding
-    resolution: 720p
-    use_gpu: true

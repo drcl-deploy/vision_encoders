@@ -9,16 +9,22 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
-find_package(unitree_go REQUIRED)
 find_package(OpenCV REQUIRED)
 
-# ONNX Runtime GPU — pre-built in thirdparty/
-set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-gpu")
+# ONNX Runtime GPU — symlink pre-built release into thirdparty/
+# (same pattern as cpp_control; see readme.md)
+set(ONNXRUNTIME_VERSION "1.22.0")
+set(ONNXRUNTIME_ROOT
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
 
 if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include")
   message(FATAL_ERROR
-    "ONNX Runtime not found at ${ONNXRUNTIME_ROOT}\n"
-    "Run: bash scripts/setup_onnxruntime.sh")
+    "ONNX Runtime GPU not found at ${ONNXRUNTIME_ROOT}\n"
+    "Download onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz from\n"
+    "  https://github.com/microsoft/onnxruntime/releases/tag/v${ONNXRUNTIME_VERSION}\n"
+    "extract it, and symlink it into thirdparty/:\n"
+    "  ln -s /PATH/TO/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION} "
+    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/")
 endif()
 
 add_library(onnxruntime SHARED IMPORTED)
@@ -27,19 +33,13 @@ set_target_properties(onnxruntime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_ROOT}/include"
 )
 
-# Theia Tiny Node (DDS subscriber — requires matching CycloneDDS versions)
+# Theia Tiny Node — unified TCP receiver for both sim and real.
 add_executable(theia_tiny_node src/theia_tiny_node.cpp)
 target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
 target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
-ament_target_dependencies(theia_tiny_node rclcpp std_msgs unitree_go)
+ament_target_dependencies(theia_tiny_node rclcpp std_msgs)
 
-# Theia Tiny TCP Node (TCP receiver — bypasses DDS for camera frames)
-add_executable(theia_tiny_tcp_node src/theia_tiny_tcp_node.cpp)
-target_compile_features(theia_tiny_tcp_node PUBLIC cxx_std_17)
-target_link_libraries(theia_tiny_tcp_node onnxruntime ${OpenCV_LIBS})
-ament_target_dependencies(theia_tiny_tcp_node rclcpp std_msgs)
-
-install(TARGETS theia_tiny_node theia_tiny_tcp_node
+install(TARGETS theia_tiny_node
   DESTINATION lib/${PROJECT_NAME})
 
 # Install ONNX Runtime shared libs alongside the node
