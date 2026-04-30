@@ -71,8 +71,8 @@ def main():
 
     # Resolve values: CLI overrides > config (flat namespace now)
     model_name = args.model_name or cfg["hf_name"]
-    height = args.height or cfg["cam_height"]
-    width = args.width or cfg["cam_width"]
+    height = args.height or cfg["model_input_height"]
+    width = args.width or cfg["model_input_width"]
     opset = args.opset or cfg["opset"]
     output_path = args.output or os.path.join(PKG_ROOT, cfg["model_path"])
 

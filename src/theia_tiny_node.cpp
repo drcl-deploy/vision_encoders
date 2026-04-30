@@ -36,8 +36,10 @@ public:
     this->declare_parameter<std::string>("embedding_topic", "/theia_embedding");
     this->declare_parameter<std::string>("camera_ip", "127.0.0.1");
     this->declare_parameter<int>("camera_port", 5555);
-    this->declare_parameter<int>("cam_width", 640);
-    this->declare_parameter<int>("cam_height", 480);
+    this->declare_parameter<int>("raw_frame_width", 640);
+    this->declare_parameter<int>("raw_frame_height", 480);
+    this->declare_parameter<int>("model_input_width", 224);
+    this->declare_parameter<int>("model_input_height", 224);
     // Export-only params — declared so ROS 2 doesn't warn.
     this->declare_parameter<std::string>("hf_name", "");
     this->declare_parameter<int>("opset", 17);
@@ -46,16 +48,18 @@ public:
     const auto embedding_topic = this->get_parameter("embedding_topic").as_string();
     camera_ip_ = this->get_parameter("camera_ip").as_string();
     camera_port_ = static_cast<uint16_t>(this->get_parameter("camera_port").as_int());
-    cam_width_ = this->get_parameter("cam_width").as_int();
-    cam_height_ = this->get_parameter("cam_height").as_int();
+    raw_frame_width_ = this->get_parameter("raw_frame_width").as_int();
+    raw_frame_height_ = this->get_parameter("raw_frame_height").as_int();
+    model_input_width_ = this->get_parameter("model_input_width").as_int();
+    model_input_height_ = this->get_parameter("model_input_height").as_int();
 
     if (model_path.empty()) {
       RCLCPP_FATAL(this->get_logger(), "Parameter 'model_path' must be set");
       throw std::runtime_error("model_path not set");
     }
 
-    input_size_ = 3 * cam_height_ * cam_width_;
-    num_patches_ = (cam_height_ / 16) * (cam_width_ / 16);
+    input_size_ = 3 * model_input_height_ * model_input_width_;
+    num_patches_ = (model_input_height_ / 16) * (model_input_width_ / 16);
 
     // ONNX Runtime — CUDA required, fail loud otherwise.
     auto providers = Ort::GetAvailableProviders();
@@ -86,8 +90,11 @@ public:
     }
     output_size_ = num_patches_ * hidden_dim_;
 
-    RCLCPP_INFO(this->get_logger(), "%dx%d -> %zu patches x %zu dim = %zu floats",
-                cam_width_, cam_height_, num_patches_, hidden_dim_, output_size_);
+    RCLCPP_INFO(this->get_logger(),
+                "raw %dx%d -> model %dx%d -> %zu patches x %zu dim = %zu floats",
+                raw_frame_width_, raw_frame_height_,
+                model_input_width_, model_input_height_,
+                num_patches_, hidden_dim_, output_size_);
 
     input_buf_.resize(input_size_);
     pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(embedding_topic, 10);
@@ -156,8 +163,10 @@ private:
         cv::Mat img = cv::imdecode(jpg_buf, cv::IMREAD_COLOR);  // BGR
         if (img.empty()) continue;
 
-        if (img.cols != cam_width_ || img.rows != cam_height_) {
-          cv::resize(img, img, cv::Size(cam_width_, cam_height_));
+        // Stage 1 resize: wire -> raw_frame_*. Sanity step in case the producer
+        // doesn't honor the agreed-upon hardware-mirror resolution.
+        if (img.cols != raw_frame_width_ || img.rows != raw_frame_height_) {
+          cv::resize(img, img, cv::Size(raw_frame_width_, raw_frame_height_));
         }
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
@@ -182,6 +191,12 @@ private:
 
     auto t0 = std::chrono::steady_clock::now();
 
+    // Stage 2 resize: raw_frame_* -> model_input_*. This is the resolution the
+    // ONNX was exported at and the policy was trained against.
+    if (frame.cols != model_input_width_ || frame.rows != model_input_height_) {
+      cv::resize(frame, frame, cv::Size(model_input_width_, model_input_height_));
+    }
+
     // BGR -> normalized RGB, CHW layout. ImageNet stats, matches Isaac Lab's
     // image_features / _prepare_theia_transformer_model.
     const size_t h = static_cast<size_t>(frame.rows);
@@ -198,7 +213,8 @@ private:
 
     std::array<int64_t, 4> input_shape = {
       1, static_cast<int64_t>(kChannels),
-      static_cast<int64_t>(cam_height_), static_cast<int64_t>(cam_width_)
+      static_cast<int64_t>(model_input_height_),
+      static_cast<int64_t>(model_input_width_)
     };
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
@@ -232,8 +248,10 @@ private:
   std::unique_ptr<Ort::Env> env_;
   std::unique_ptr<Ort::Session> session_;
 
-  int cam_width_ = 640;
-  int cam_height_ = 480;
+  int raw_frame_width_ = 640;
+  int raw_frame_height_ = 480;
+  int model_input_width_ = 224;
+  int model_input_height_ = 224;
   size_t input_size_ = 0;
   size_t num_patches_ = 0;
   size_t hidden_dim_ = 192;
