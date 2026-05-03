@@ -19,6 +19,7 @@ import os
 import socket
 import struct
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -29,13 +30,21 @@ from std_msgs.msg import Float32MultiArray
 
 HEATMAP_H = 120
 EMBED_DIM = 192
+FPS_EMA_ALPHA = 0.1
 
 
-def _label(img, text):
+def _label(img, text_or_lines):
     out = img.copy()
-    cv2.putText(out, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                (0, 255, 0), 2, cv2.LINE_AA)
+    lines = [text_or_lines] if isinstance(text_or_lines, str) else list(text_or_lines)
+    for i, text in enumerate(lines):
+        y = 22 + i * 22
+        cv2.putText(out, text, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (0, 255, 0), 2, cv2.LINE_AA)
     return out
+
+
+def _ema(prev, sample, alpha=FPS_EMA_ALPHA):
+    return sample if prev == 0.0 else (1 - alpha) * prev + alpha * sample
 
 
 def _default_config_path():
@@ -75,8 +84,17 @@ class TheiaViewer(Node):
         self.heatmap_frame = None
         self._stop = threading.Event()
 
+        self._cam_fps = 0.0
+        self._cam_last_t = 0.0
+        self._infer_hz = 0.0
+        self._infer_last_t = 0.0
+        self._tcp_ms = 0.0
+        self._infer_ms = 0.0
+
         self.create_subscription(
             Float32MultiArray, '/theia_embedding', self._on_embedding, 10)
+        self.create_subscription(
+            Float32MultiArray, '/theia_stats', self._on_stats, 10)
         self.create_timer(1.0 / 30.0, self._refresh)
 
         self._cam_thread = threading.Thread(target=self._camera_loop, daemon=True)
@@ -106,6 +124,12 @@ class TheiaViewer(Node):
                             img = cv2.resize(img, (raw_w, raw_h))
                         self.raw_frame = img
                         self.model_input_frame = cv2.resize(img, (m_w, m_h))
+                        now_t = time.monotonic()
+                        if self._cam_last_t:
+                            self._cam_fps = _ema(
+                                self._cam_fps,
+                                1.0 / max(now_t - self._cam_last_t, 1e-6))
+                        self._cam_last_t = now_t
             except OSError as e:
                 self.get_logger().warn(f'Camera TCP: {e}; retrying in 2s')
                 self._stop.wait(2.0)
@@ -119,13 +143,28 @@ class TheiaViewer(Node):
                                cv2.NORM_MINMAX)
         self.heatmap_frame = cv2.applyColorMap(normed.astype(np.uint8),
                                                cv2.COLORMAP_HOT)
+        now_t = time.monotonic()
+        if self._infer_last_t:
+            self._infer_hz = _ema(
+                self._infer_hz, 1.0 / max(now_t - self._infer_last_t, 1e-6))
+        self._infer_last_t = now_t
+
+    def _on_stats(self, msg):
+        if len(msg.data) >= 2:
+            self._tcp_ms = float(msg.data[0])
+            self._infer_ms = float(msg.data[1])
 
     def _refresh(self):
         panels = []
         display_w = self.cfg['raw_frame_width']
         display_h = self.cfg['raw_frame_height']
         if self.raw_frame is not None:
-            panels.append(_label(self.raw_frame, 'raw'))
+            pass_ms = self._tcp_ms + self._infer_ms
+            overlay = [
+                f'raw  |  cam {self._cam_fps:5.1f} FPS  |  infer {self._infer_hz:5.1f} Hz',
+                f'tcp {self._tcp_ms:5.1f} ms  +  infer {self._infer_ms:5.1f} ms  =  pass {pass_ms:5.1f} ms',
+            ]
+            panels.append(_label(self.raw_frame, overlay))
         if self.model_input_frame is not None:
             up = cv2.resize(self.model_input_frame, (display_w, display_h),
                             interpolation=cv2.INTER_NEAREST)

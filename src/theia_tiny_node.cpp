@@ -40,6 +40,7 @@ public:
     this->declare_parameter<int>("raw_frame_height", 480);
     this->declare_parameter<int>("model_input_width", 224);
     this->declare_parameter<int>("model_input_height", 224);
+    this->declare_parameter<double>("inference_rate_hz", 30.0);
     // Export-only params — declared so ROS 2 doesn't warn.
     this->declare_parameter<std::string>("hf_name", "");
     this->declare_parameter<int>("opset", 17);
@@ -52,6 +53,7 @@ public:
     raw_frame_height_ = this->get_parameter("raw_frame_height").as_int();
     model_input_width_ = this->get_parameter("model_input_width").as_int();
     model_input_height_ = this->get_parameter("model_input_height").as_int();
+    const double inference_rate_hz = this->get_parameter("inference_rate_hz").as_double();
 
     if (model_path.empty()) {
       RCLCPP_FATAL(this->get_logger(), "Parameter 'model_path' must be set");
@@ -98,15 +100,18 @@ public:
 
     input_buf_.resize(input_size_);
     pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(embedding_topic, 10);
+    stats_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/theia_stats", 10);
 
     running_.store(true);
     tcp_thread_ = std::thread(&TheiaTinyNode::tcp_loop, this);
+    const auto period = std::chrono::duration<double>(1.0 / inference_rate_hz);
     timer_ = this->create_wall_timer(
-      std::chrono::milliseconds(33),
+      std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       std::bind(&TheiaTinyNode::infer_latest, this));
 
-    RCLCPP_INFO(this->get_logger(), "Connecting to %s:%u  |  Publishing: %s",
-                camera_ip_.c_str(), camera_port_, embedding_topic.c_str());
+    RCLCPP_INFO(this->get_logger(),
+                "Connecting to %s:%u  |  Publishing: %s  |  Inference tick: %.1f Hz",
+                camera_ip_.c_str(), camera_port_, embedding_topic.c_str(), inference_rate_hz);
   }
 
   ~TheiaTinyNode() override
@@ -160,6 +165,7 @@ private:
         std::vector<uint8_t> jpg_buf(length);
         if (!recv_exact(fd, jpg_buf.data(), length)) break;
 
+        auto t_decode_start = std::chrono::steady_clock::now();
         cv::Mat img = cv::imdecode(jpg_buf, cv::IMREAD_COLOR);  // BGR
         if (img.empty()) continue;
 
@@ -168,9 +174,12 @@ private:
         if (img.cols != raw_frame_width_ || img.rows != raw_frame_height_) {
           cv::resize(img, img, cv::Size(raw_frame_width_, raw_frame_height_));
         }
+        double tcp_decode_ms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - t_decode_start).count();
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
         latest_frame_ = std::move(img);
+        latest_tcp_decode_ms_ = tcp_decode_ms;
         has_new_frame_ = true;
       }
 
@@ -182,10 +191,12 @@ private:
   void infer_latest()
   {
     cv::Mat frame;
+    double tcp_decode_ms = 0.0;
     {
       std::lock_guard<std::mutex> lock(frame_mutex_);
       if (!has_new_frame_) return;
       frame = std::move(latest_frame_);
+      tcp_decode_ms = latest_tcp_decode_ms_;
       has_new_frame_ = false;
     }
 
@@ -240,9 +251,15 @@ private:
     out_msg.data.assign(features, features + output_size_);
     pub_->publish(out_msg);
 
-    auto dt = std::chrono::steady_clock::now() - t0;
-    RCLCPP_DEBUG(this->get_logger(), "Inference: %.1f ms",
-                 std::chrono::duration<double, std::milli>(dt).count());
+    double infer_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - t0).count();
+
+    std_msgs::msg::Float32MultiArray stats_msg;
+    stats_msg.data = {static_cast<float>(tcp_decode_ms), static_cast<float>(infer_ms)};
+    stats_pub_->publish(stats_msg);
+
+    RCLCPP_DEBUG(this->get_logger(), "TCP decode: %.1f ms | Inference: %.1f ms",
+                 tcp_decode_ms, infer_ms);
   }
 
   std::unique_ptr<Ort::Env> env_;
@@ -265,9 +282,11 @@ private:
   std::atomic<bool> running_{false};
   std::mutex frame_mutex_;
   cv::Mat latest_frame_;
+  double latest_tcp_decode_ms_ = 0.0;
   bool has_new_frame_ = false;
 
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_;
+  rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr stats_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

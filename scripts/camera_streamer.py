@@ -34,7 +34,7 @@ import time
 
 WIDTH = 640
 HEIGHT = 480
-FPS = 30
+FPS = 60
 JPEG_QUALITY = 80
 PORT = 5555
 
