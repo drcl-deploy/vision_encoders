@@ -19,7 +19,8 @@ theia_tiny_node:
     # and the sim's head-camera TCP server in unitree_sdk2_bridge.h.
     # Real Orin:  192.168.123.164
     # Sim:        127.0.0.1
-    camera_ip: "192.168.123.164"
+    # camera_ip: "192.168.123.164" # real, orin
+    camera_ip: "127.0.0.1" # sim, unitree_mujoco
     camera_port: 5555
 
     # node
