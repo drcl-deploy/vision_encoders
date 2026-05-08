@@ -47,37 +47,48 @@ The ORT prebuilt is linked against CUDA 12.x / cuDNN 9.x. If your system doesn't
 already have them (check with `ldconfig -p | grep libcudnn.so.9`), the cleanest
 way — no `sudo`, no driver changes, no conflict with conda training envs — is to
 pull them from the NVIDIA pip wheels and drop the `.so` files next to the
-onnxruntime libs. ORT's `libonnxruntime_providers_cuda.so` has RUNPATH `$ORIGIN`,
-so same-dir libs resolve automatically.
+onnxruntime libs.
 
 ```bash
-mkdir -p /tmp/cudnn_grab
-pip3 install --target=/tmp/cudnn_grab \
-  nvidia-cudnn-cu12==9.* nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12
+mkdir -p /tmp/cuda_grab
+pip3 install --target=/tmp/cuda_grab \
+  nvidia-cudnn-cu12==9.* nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 \
+  nvidia-cuda-nvrtc-cu12 nvidia-curand-cu12 nvidia-cufft-cu12
 
 DEST=./vision_encoders/thirdparty/onnxruntime-linux-x64-gpu-1.22.0/lib
-cp -av /tmp/cudnn_grab/nvidia/cudnn/lib/libcudnn*.so*         $DEST/
-cp -av /tmp/cudnn_grab/nvidia/cublas/lib/libcublas*.so*       $DEST/
-cp -av /tmp/cudnn_grab/nvidia/cublas/lib/libcublasLt*.so*     $DEST/
-cp -av /tmp/cudnn_grab/nvidia/cuda_runtime/lib/libcudart*.so* $DEST/
-cp -av /tmp/cudnn_grab/nvidia/cuda_nvrtc/lib/libnvrtc*.so*    $DEST/
+cp -av /tmp/cuda_grab/nvidia/cudnn/lib/libcudnn*.so*         $DEST/
+cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublas*.so*       $DEST/
+cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublasLt*.so*     $DEST/
+cp -av /tmp/cuda_grab/nvidia/cuda_runtime/lib/libcudart*.so* $DEST/
+cp -av /tmp/cuda_grab/nvidia/cuda_nvrtc/lib/libnvrtc*.so*    $DEST/
+cp -av /tmp/cuda_grab/nvidia/curand/lib/libcurand*.so*       $DEST/
+cp -av /tmp/cuda_grab/nvidia/cufft/lib/libcufft*.so*         $DEST/
 
-rm -rf /tmp/cudnn_grab
+rm -rf /tmp/cuda_grab
+```
+
+The ORT provider `.so` ships without RUNPATH, so patch it once after extracting:
+
+```bash
+pip3 install patchelf   # if not already installed
+patchelf --set-rpath '$ORIGIN' $DEST/libonnxruntime_providers_cuda.so
 ```
 
 The CMake `install()` rule ships every `*.so*` from that dir into
-`install/lib/`, so the runtime deps travel with the built node.
+`install/lib/`, and the node binary's RPATH points back to that dir, so
+the runtime deps travel with the built node.
 
 Sanity-check before launching:
 
 ```bash
-ldd install/vision_encoders/lib/libonnxruntime_providers_cuda.so | grep -E 'cudnn|cublas|cudart'
-# expect all three resolved — no "not found"
+ldd install/vision_encoders/lib/libonnxruntime_providers_cuda.so \
+  | grep -E 'cudnn|cublas|cudart|curand|cufft'
+# expect all resolved — no "not found"
 ```
 
-(System apt `libcudnn9-cuda-12` / `cuda-runtime-12-6` also works if you prefer
-that route; the wheel-pluck above just keeps everything contained inside the
-package.)
+(System apt `libcudnn9-cuda-12` / `cuda-runtime-12-6` etc. also works if you
+prefer that route; the wheel-pluck above just keeps everything contained inside
+the package.)
 
 ### export ONNX + build
 

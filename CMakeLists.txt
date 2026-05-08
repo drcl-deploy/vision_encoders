@@ -40,6 +40,13 @@ target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
 target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
 ament_target_dependencies(theia_tiny_node rclcpp std_msgs sensor_msgs)
 
+# The node lives in lib/<PROJECT_NAME>/ but ORT + CUDA libs install to lib/.
+# Set RPATH so the dynamic linker finds them relative to the binary.
+set_target_properties(theia_tiny_node PROPERTIES
+  INSTALL_RPATH "$ORIGIN/../"
+  BUILD_WITH_INSTALL_RPATH FALSE
+)
+
 install(TARGETS theia_tiny_node
   DESTINATION lib/${PROJECT_NAME})
 
