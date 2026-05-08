@@ -89,59 +89,57 @@ colcon build --symlink-install --packages-select vision_encoders
 source install/setup.bash
 ```
 
-## usage
+## launch
 
-### real (Orin)
-
-On the Orin, run the camera streamer (bypasses the CycloneDDS 0.7↔0.10 interop bug):
-
-```bash
-python3 scripts/camera_streamer.py
-```
-
-On the desktop, set `camera_ip` to the Orin's IP and launch:
+Real: start `camera_streamer.py` on the Orin first, set `camera_ip` to Orin IP
+in [config/theia_tiny.yaml](config/theia_tiny.yaml). Sim: `unitree_mujoco` serves the same stream on `127.0.0.1`.
 
 ```bash
+# inference only
 ros2 launch vision_encoders theia_tiny.launch.py
+
+# + OpenCV viewer (camera frame + embedding heatmap)
+ros2 launch vision_encoders theia_tiny.launch.py viewer:=true
+
+# + joystick-gated bag recorder (A starts, Y/R1 stops)
+# bag lands at <dir>/<YYYYMonDD_HHMM>/
+ros2 launch vision_encoders theia_tiny.launch.py record:=/path/to/scenario_dir
 ```
 
-### sim (unitree_mujoco)
-
-`unitree_mujoco`'s G1 bridge (`unitree_sdk2_bridge.h`) renders the `head_cam`
-MJCF camera offscreen and serves identical 640×480 JPEG frames on TCP 5555.
-Keep `camera_ip: 127.0.0.1` and launch the node the same way:
-
-```bash
-./unitree_mujoco         # in one terminal
-ros2 launch vision_encoders theia_tiny.launch.py
-```
-
-### check output
+quick check:
 
 ```bash
 ros2 topic echo /theia_embedding --no-arr
 ```
 
-### viewer (camera + heatmap)
-
-Opens an OpenCV window showing the exact resized BGR frame going into the
-model (top) and the flattened embedding as a heatmap (bottom). The viewer
-reads `config/theia_tiny.yaml` and connects as a second TCP client to the
-same JPEG stream, so what you see is byte-identical to the node's input.
+## individual scripts
 
 ```bash
-# bundled with the node launch
-ros2 launch vision_encoders theia_tiny.launch.py viewer:=true
+# Orin-side TCP JPEG producer (real hardware)
+python3 scripts/camera_streamer.py
 
-# or standalone (node must already be running somewhere)
-python3 cyclonedds_ws/src/vision_encoders/scripts/theia_viewer.py
+# export HuggingFace Theia -> ONNX (reads config/theia_tiny.yaml)
+python3 scripts/export_theia_onnx.py
+
+# standalone live viewer (node must be running)
+python3 scripts/theia_viewer.py
+
+# scrub an IsaacLab fpv_dataset.pt interactively
+python3 scripts/fpv_dataset_viewer.py --dataset /path/to/fpv_dataset_dir
+
+# A/B compare IsaacLab dataset vs recorded rollout
+python3 scripts/domain_comparison.py --source /path/to/fpv_dataset_dir --target /path/to/bag_dir
+
+# C++ <-> IsaacLab encoder parity test (MSE / cosine)
+python3 tests/implementation_consistency.py --dataset /path/to/fpv_dataset_dir
 ```
 
-### topics
+## topics
 
 | direction | topic | type | shape |
 |-----------|-------|------|-------|
-| pub | `/theia_embedding` | `Float32MultiArray` | (H/16)*(W/16) × 192, layout-encoded |
+| pub | `/theia_embedding`     | `Float32MultiArray` | (H/16)*(W/16) × 192, layout-encoded |
+| pub | `/theia_input_frame`   | `sensor_msgs/Image` (rgb8) | post-resize, pre-norm; only when recording |
 
 Images come over raw TCP, not ROS — see `scripts/camera_streamer.py` and
 `unitree_sdk2_bridge.h::G1Bridge::renderCamera` for producers.
@@ -162,11 +160,18 @@ ONNX export must.
 
 ```
 vision_encoders/
-├── config/theia_tiny.yaml        # single source of truth
+├── config/
+│   ├── theia_tiny.yaml                         # single source of truth
+│   └── theia_tiny_consistency_test.yaml        # parity-test override (no-op resizes)
 ├── launch/theia_tiny.launch.py
 ├── scripts/
 │   ├── camera_streamer.py                      # Orin-side TCP JPEG producer (real)
-│   └── export_theia_onnx.py                    # HF model → ONNX
+│   ├── export_theia_onnx.py                    # HF model -> ONNX
+│   ├── theia_viewer.py                         # live camera + heatmap
+│   ├── fpv_dataset_viewer.py                   # scrub IsaacLab fpv dataset
+│   ├── domain_comparison.py                    # sim vs rollout side-by-side
+│   └── recording_node.py                       # joystick-gated bag writer
+├── tests/implementation_consistency.py         # C++/IsaacLab encoder parity
 ├── src/theia_tiny_node.cpp                     # ROS 2 inference node (CUDA-only)
 ├── thirdparty/onnxruntime-linux-x64-gpu-1.22.0 # (symlink, see install)
 └── models/theia_tiny.onnx                      # (created by export script)
