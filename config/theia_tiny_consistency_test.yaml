@@ -1,0 +1,31 @@
+theia_tiny_node:
+  ros__parameters:
+    # Test config used by tests/implementation_consistency.py.
+    # Differs from theia_tiny.yaml only in that raw_frame_* == model_input_*,
+    # so both cv::resize stages in the node are no-ops. The IsaacLab fpv
+    # dataset frames are already at model_input resolution; any resize would
+    # corrupt the input and inflate MSE for reasons unrelated to the encoder.
+
+    # model
+    hf_name: theaiinstitute/theia-tiny-patch16-224-cddsv
+    model_path: models/theia_tiny.onnx
+    opset: 17
+
+    # raw frame size on the wire == model input (no resize).
+    raw_frame_width: 57
+    raw_frame_height: 32
+
+    # model input — must match how the ONNX was exported.
+    model_input_width: 57
+    model_input_height: 32
+
+    # Loopback only; the test script binds 127.0.0.1:5555 itself.
+    camera_ip: "127.0.0.1"
+    camera_port: 5555
+
+    # node
+    embedding_topic: /theia_embedding
+    publish_input_frame: false
+    input_frame_topic: /theia_input_frame
+    # tests pace by request/response, but a high tick keeps latency low.
+    inference_rate_hz: 100.0

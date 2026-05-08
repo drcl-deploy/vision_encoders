@@ -1,7 +1,8 @@
 /**
  * Theia-Tiny inference node.
  *
- * Reads JPEG frames from a TCP stream (4-byte LE length + JPEG payload) and
+ * Reads PNG frames from a TCP stream (4-byte LE length + image payload; JPEG/PNG
+ * both decode fine via cv::imdecode magic-byte sniffing) and
  * publishes patch-token embeddings on a ROS 2 topic.
  *
  * Producers on the other end of the TCP wire:
@@ -11,6 +12,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 
@@ -41,6 +43,11 @@ public:
     this->declare_parameter<int>("model_input_width", 224);
     this->declare_parameter<int>("model_input_height", 224);
     this->declare_parameter<double>("inference_rate_hz", 30.0);
+    // When true, publish the post-resize pre-normalize input frame on
+    // /theia_input_frame (sensor_msgs/Image, rgb8) so a `ros2 bag record`
+    // can capture aligned (frame, embedding) pairs for offline evaluation.
+    this->declare_parameter<bool>("publish_input_frame", false);
+    this->declare_parameter<std::string>("input_frame_topic", "/theia_input_frame");
     // Export-only params — declared so ROS 2 doesn't warn.
     this->declare_parameter<std::string>("hf_name", "");
     this->declare_parameter<int>("opset", 17);
@@ -54,6 +61,8 @@ public:
     model_input_width_ = this->get_parameter("model_input_width").as_int();
     model_input_height_ = this->get_parameter("model_input_height").as_int();
     const double inference_rate_hz = this->get_parameter("inference_rate_hz").as_double();
+    publish_input_frame_ = this->get_parameter("publish_input_frame").as_bool();
+    const auto input_frame_topic = this->get_parameter("input_frame_topic").as_string();
 
     if (model_path.empty()) {
       RCLCPP_FATAL(this->get_logger(), "Parameter 'model_path' must be set");
@@ -101,6 +110,12 @@ public:
     input_buf_.resize(input_size_);
     pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(embedding_topic, 10);
     stats_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/theia_stats", 10);
+    if (publish_input_frame_) {
+      frame_pub_ = this->create_publisher<sensor_msgs::msg::Image>(input_frame_topic, 10);
+      RCLCPP_INFO(this->get_logger(),
+                  "Publishing post-resize input frame on %s (rgb8) for bag recording",
+                  input_frame_topic.c_str());
+    }
 
     running_.store(true);
     tcp_thread_ = std::thread(&TheiaTinyNode::tcp_loop, this);
@@ -208,6 +223,23 @@ private:
       cv::resize(frame, frame, cv::Size(model_input_width_, model_input_height_));
     }
 
+    // Publish the post-resize, pre-normalize frame for bag-based dataset capture.
+    // rgb8 mirrors the IsaacLab fpv dataset frame format ("uint8 RGB, channels-last").
+    if (publish_input_frame_ && frame_pub_) {
+      auto img_msg = sensor_msgs::msg::Image();
+      img_msg.header.stamp = this->now();
+      img_msg.header.frame_id = "theia_input";
+      img_msg.height = static_cast<uint32_t>(frame.rows);
+      img_msg.width = static_cast<uint32_t>(frame.cols);
+      img_msg.encoding = "rgb8";
+      img_msg.is_bigendian = 0;
+      img_msg.step = static_cast<uint32_t>(frame.cols * 3);
+      cv::Mat rgb;
+      cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+      img_msg.data.assign(rgb.datastart, rgb.dataend);
+      frame_pub_->publish(img_msg);
+    }
+
     // BGR -> normalized RGB, CHW layout. ImageNet stats, matches Isaac Lab's
     // image_features / _prepare_theia_transformer_model.
     const size_t h = static_cast<size_t>(frame.rows);
@@ -287,6 +319,8 @@ private:
 
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr pub_;
   rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr stats_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr frame_pub_;
+  bool publish_input_frame_ = false;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

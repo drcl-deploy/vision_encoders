@@ -9,6 +9,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 
 # ONNX Runtime GPU — symlink pre-built release into thirdparty/
@@ -37,7 +38,7 @@ set_target_properties(onnxruntime PROPERTIES
 add_executable(theia_tiny_node src/theia_tiny_node.cpp)
 target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
 target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
-ament_target_dependencies(theia_tiny_node rclcpp std_msgs)
+ament_target_dependencies(theia_tiny_node rclcpp std_msgs sensor_msgs)
 
 install(TARGETS theia_tiny_node
   DESTINATION lib/${PROJECT_NAME})
