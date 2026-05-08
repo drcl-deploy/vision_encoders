@@ -1,7 +1,7 @@
 theia_tiny_node:
   ros__parameters:
     # model
-    hf_name: theaiinstitute/theia-tiny-patch16-224-cdiv
+    hf_name: theaiinstitute/theia-tiny-patch16-224-cddsv
     model_path: models/theia_tiny.onnx
     opset: 17
 
