@@ -7,7 +7,7 @@ Background:
     (Humble) which can't reassemble large fragmented messages from the 0.7
     publisher -- frames get truncated from ~40KB to ~360 bytes, producing a
     green screen. This script bypasses both the broken publisher and DDS
-    entirely with direct TCP JPEG streaming via pyrealsense2.
+    entirely with direct TCP PNG streaming via pyrealsense2.
 
 Workflow (on the Orin):
     1. Kill the Unitree video service that holds the camera:
@@ -35,7 +35,7 @@ import time
 WIDTH = 640
 HEIGHT = 480
 FPS = 60
-JPEG_QUALITY = 80
+PNG_COMPRESSION = 1  # 0=none, 9=max; 1 keeps encode CPU low (frames are lossless either way)
 PORT = 5555
 
 
@@ -96,8 +96,8 @@ def main():
         if not color:
             continue
         img = np.asanyarray(color.get_data())
-        _, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-        payload = struct.pack("<I", len(jpg)) + jpg.tobytes()
+        _, png = cv2.imencode(".png", img, [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION])
+        payload = struct.pack("<I", len(png)) + png.tobytes()
 
         with clients_lock:
             dead = []
