@@ -12,21 +12,31 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
 
-# ONNX Runtime GPU — symlink pre-built release into thirdparty/
-# (same pattern as cpp_control; see readme.md)
-set(ONNXRUNTIME_VERSION "1.22.0")
-set(ONNXRUNTIME_ROOT
-  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
+# ONNX Runtime GPU — symlink pre-built (or source-built) release into thirdparty/
+# Auto-detects architecture and version. See readme.md.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+    set(_ort_arch "x64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_ort_arch "aarch64")
+endif()
+file(GLOB _ort_candidates "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-${_ort_arch}-gpu-*")
+list(SORT _ort_candidates ORDER DESCENDING)
+list(LENGTH _ort_candidates _ort_count)
+if(_ort_count GREATER 0)
+    list(GET _ort_candidates 0 ONNXRUNTIME_ROOT)
+else()
+    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/NOTFOUND")
+endif()
 
 if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include")
   message(FATAL_ERROR
-    "ONNX Runtime GPU not found at ${ONNXRUNTIME_ROOT}\n"
-    "Download onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz from\n"
-    "  https://github.com/microsoft/onnxruntime/releases/tag/v${ONNXRUNTIME_VERSION}\n"
-    "extract it, and symlink it into thirdparty/:\n"
-    "  ln -s /PATH/TO/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION} "
+    "ONNX Runtime GPU not found in ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/\n"
+    "Expected: onnxruntime-linux-${_ort_arch}-gpu-<version>\n"
+    "Download or build onnxruntime with CUDA, then symlink into thirdparty/:\n"
+    "  ln -s /PATH/TO/onnxruntime-linux-${_ort_arch}-gpu-<version> "
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/")
 endif()
+message(STATUS "Found ONNX Runtime GPU at ${ONNXRUNTIME_ROOT}")
 
 add_library(onnxruntime SHARED IMPORTED)
 set_target_properties(onnxruntime PROPERTIES

@@ -31,14 +31,40 @@ Same pattern as [cpp_control](../cpp_control/readme.md#install) — drop pre-bui
 libraries into [thirdparty](./thirdparty/) and CMake picks them up. CUDA is
 required for this node; there is no CPU fallback.
 
-**1. onnxruntime-gpu v1.22.0**
+**1. onnxruntime-gpu**
 
-* download [`onnxruntime-linux-x64-gpu-1.22.0.tgz`](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0)
-  and extract it somewhere stable.
-* symlink it into `thirdparty/`:
+CMake auto-detects architecture and version — just drop a
+`onnxruntime-linux-<arch>-gpu-<version>` directory into `thirdparty/`.
+
+**x86_64 (desktop/workstation):** download a pre-built release, e.g.
+[`onnxruntime-linux-x64-gpu-1.22.0.tgz`](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0),
+extract, and symlink:
 
 ```bash
 ln -s /PATH/TO/onnxruntime-linux-x64-gpu-1.22.0 ./vision_encoders/thirdparty/
+```
+
+**aarch64 (Jetson Orin):** no pre-built GPU release exists — build from source.
+Use a version compatible with your JetPack's CUDA (e.g. ORT 1.15.x for CUDA 11.4
+on JetPack 5, ORT 1.22+ for CUDA 12.x on JetPack 6):
+
+```bash
+git clone --recursive --branch v1.15.1 --depth 1 \
+  https://github.com/microsoft/onnxruntime.git
+cd onnxruntime
+python3 tools/ci_build/build.py \
+  --config Release --build_shared_lib --parallel \
+  --use_cuda --cuda_home /usr/local/cuda \
+  --cudnn_home /usr/lib/aarch64-linux-gnu \
+  --skip_tests --allow_running_as_root --build_dir build \
+  --cmake_extra_defines CMAKE_C_COMPILER=gcc-11 CMAKE_CXX_COMPILER=g++-11
+
+# Package into the expected layout
+mkdir -p onnxruntime-linux-aarch64-gpu-1.15.1/{lib,include}
+cp build/Release/libonnxruntime*.so* onnxruntime-linux-aarch64-gpu-1.15.1/lib/
+cp include/onnxruntime/core/session/*.h onnxruntime-linux-aarch64-gpu-1.15.1/include/
+
+ln -s /PATH/TO/onnxruntime-linux-aarch64-gpu-1.15.1 ./vision_encoders/thirdparty/
 ```
 
 **2. CUDA 12.x + cuDNN 9.x runtime libs**
@@ -55,7 +81,7 @@ pip3 install --target=/tmp/cuda_grab \
   nvidia-cudnn-cu12==9.* nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 \
   nvidia-cuda-nvrtc-cu12 nvidia-curand-cu12 nvidia-cufft-cu12
 
-DEST=./vision_encoders/thirdparty/onnxruntime-linux-x64-gpu-1.22.0/lib
+DEST=./vision_encoders/thirdparty/onnxruntime-linux-x64-gpu-<version>/lib
 cp -av /tmp/cuda_grab/nvidia/cudnn/lib/libcudnn*.so*         $DEST/
 cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublas*.so*       $DEST/
 cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublasLt*.so*     $DEST/
@@ -184,6 +210,6 @@ vision_encoders/
 │   └── recording_node.py                       # joystick-gated bag writer
 ├── tests/implementation_consistency.py         # C++/IsaacLab encoder parity
 ├── src/theia_tiny_node.cpp                     # ROS 2 inference node (CUDA-only)
-├── thirdparty/onnxruntime-linux-x64-gpu-1.22.0 # (symlink, see install)
+├── thirdparty/onnxruntime-linux-<arch>-gpu-<ver> # (symlink, see install)
 └── models/theia_tiny.onnx                      # (created by export script)
 ```
