@@ -9,6 +9,9 @@ Usage:
       #   A -> Y/R1 cycle creates <dir>/segNN/ as its own bag.
   ros2 launch vision_encoders theia_tiny.launch.py viewer:=true record:=/tmp/run
       # ^ all of the above
+
+  # Onboard mode (streamer + node on same Orin, no ethernet):
+  ros2 launch vision_encoders theia_tiny.launch.py onboard:=true
 """
 import os
 
@@ -30,6 +33,7 @@ def generate_launch_description():
     config_path = os.path.join(pkg_share, 'config', 'theia_tiny.yaml')
     viewer_script = os.path.join(pkg_share, 'scripts', 'theia_viewer.py')
     recorder_script = os.path.join(pkg_share, 'scripts', 'recording_node.py')
+    streamer_script = os.path.join(pkg_share, 'scripts', 'camera_streamer.py')
 
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
@@ -42,6 +46,7 @@ def generate_launch_description():
     def _build(context):
         record_path = LaunchConfiguration('record').perform(context)
         recording = bool(record_path)
+        onboard = LaunchConfiguration('onboard').perform(context).lower() == 'true'
         # No existence check: recording_node appends _<datetime> to the path,
         # so launching with the same record:= arg never collides.
 
@@ -49,11 +54,23 @@ def generate_launch_description():
             config_path,
             {'model_path': model_path},
         ]
+        if onboard:
+            node_params.append({'camera_ip': '127.0.0.1'})
         # recording requires the post-resize frame on the wire
         if recording:
             node_params.append({'publish_input_frame': True})
 
-        actions = [
+        streamer_cmd = ['python3', streamer_script]
+        if onboard:
+            streamer_cmd.append('--onboard')
+
+        actions = []
+        if onboard:
+            actions.append(ExecuteProcess(
+                cmd=streamer_cmd,
+                output='screen',
+            ))
+        actions += [
             Node(
                 package='vision_encoders',
                 executable='theia_tiny_node',
@@ -78,6 +95,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('viewer', default_value='false',
                               description='launch the OpenCV viewer alongside the node'),
+        DeclareLaunchArgument('onboard', default_value='false',
+                              description='run streamer + node on same device (loopback, no ethernet)'),
         DeclareLaunchArgument('record', default_value='',
                               description='if non-empty, spawn the joystick-gated recorder '
                                           'and write per-motion segments under this dir '

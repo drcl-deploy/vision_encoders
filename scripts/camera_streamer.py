@@ -10,17 +10,17 @@ Background:
     entirely with direct TCP PNG streaming via pyrealsense2.
 
 Workflow (on the Orin):
-    1. Kill the Unitree video service that holds the camera:
-           sudo systemctl stop unitree_videohub 2>/dev/null
-           sudo kill $(pgrep videohub_pc4) 2>/dev/null
-           sudo fuser -k /dev/video* 2>/dev/null
-           sleep 2
+    1. Stop the Unitree video service that holds the camera (master_service
+       supervises videohub_pc4 and will respawn it on pkill, so the supervisor
+       must be told to stop it):
+           sudo /unitree/sbin/mscli stopservice video_hub_pc4
     2. Run this streamer:
            python3 camera_streamer.py
     3. On the desktop, run the viewer:
            python3 view_front_camera.py <orin_ip>
 """
 
+import argparse
 import pyrealsense2 as rs
 import cv2
 import numpy as np
@@ -40,15 +40,9 @@ PORT = 5555
 
 
 def cleanup_camera():
-    """Kill Unitree videohub and any other processes holding the camera."""
-    print("Cleaning up camera locks...", flush=True)
-    subprocess.run(["sudo", "systemctl", "stop", "unitree_videohub"],
-                   capture_output=True)
-    subprocess.run(["sudo", "pkill", "-f", "videohub_pc4"],
-                   capture_output=True)
-    subprocess.run(["sudo", "fuser", "-k",
-                    "/dev/video0", "/dev/video1", "/dev/video2",
-                    "/dev/video3", "/dev/video4", "/dev/video5"],
+    """Stop Unitree videohub via master_service so it doesn't get respawned."""
+    print("Stopping video_hub_pc4 via master_service...", flush=True)
+    subprocess.run(["sudo", "/unitree/sbin/mscli", "stopservice", "video_hub_pc4"],
                    capture_output=True)
     time.sleep(2)
     print("Cleanup done.", flush=True)
@@ -60,6 +54,13 @@ def client_handler(conn, addr, clients, lock):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Stream D435i over TCP")
+    parser.add_argument("--onboard", action="store_true",
+                        help="Bind to 127.0.0.1 (streamer + node on same device)")
+    args = parser.parse_args()
+
+    bind_addr = "127.0.0.1" if args.onboard else "0.0.0.0"
+
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
     cleanup_camera()
@@ -72,9 +73,9 @@ def main():
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("0.0.0.0", PORT))
+    server.bind((bind_addr, PORT))
     server.listen(5)
-    print(f"Waiting for clients on port {PORT}...", flush=True)
+    print(f"Waiting for clients on {bind_addr}:{PORT}...", flush=True)
 
     clients = []
     clients_lock = threading.Lock()
