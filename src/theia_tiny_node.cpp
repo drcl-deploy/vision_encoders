@@ -13,6 +13,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 
@@ -52,7 +53,7 @@ public:
     this->declare_parameter<std::string>("hf_name", "");
     this->declare_parameter<int>("opset", 17);
 
-    const auto model_path = this->get_parameter("model_path").as_string();
+    auto model_path = this->get_parameter("model_path").as_string();
     const auto embedding_topic = this->get_parameter("embedding_topic").as_string();
     camera_ip_ = this->get_parameter("camera_ip").as_string();
     camera_port_ = static_cast<uint16_t>(this->get_parameter("camera_port").as_int());
@@ -67,6 +68,13 @@ public:
     if (model_path.empty()) {
       RCLCPP_FATAL(this->get_logger(), "Parameter 'model_path' must be set");
       throw std::runtime_error("model_path not set");
+    }
+    // Relative paths resolve against the package share dir (where the model is
+    // installed). Works for `ros2 run`, `ros2 launch`, or ad-hoc invocations
+    // regardless of CWD — and survives `colcon build --symlink-install`.
+    if (model_path.front() != '/') {
+      model_path = ament_index_cpp::get_package_share_directory("vision_encoders")
+                 + "/" + model_path;
     }
 
     input_size_ = 3 * model_input_height_ * model_input_width_;

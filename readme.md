@@ -1,8 +1,9 @@
 vision encoders
 
-One node, one wire format. Sim and real both push JPEG frames over TCP
-(`<uint32 LE length><JPEG bytes>`); the node decodes, resizes, runs Theia-Tiny
-on CUDA, and publishes patch tokens on `/theia_embedding`.
+One node, one wire format. Sim and real both push frames over TCP
+(`<uint32 LE length><JPEG-or-PNG bytes>` — opencv sniffs the magic bytes); the
+node decodes, resizes, runs Theia-Tiny on CUDA, and publishes patch tokens on
+`/theia_embedding`.
 
 ## config
 
@@ -11,14 +12,22 @@ Single source of truth: `config/theia_tiny.yaml`
 ```yaml
 theia_tiny_node:
   ros__parameters:
-    hf_name: theaiinstitute/theia-tiny-patch16-224-cdiv
-    model_path: models/theia_tiny.onnx
+    hf_name: theaiinstitute/theia-tiny-patch16-224-cddsv
+    model_path: models/theia_tiny.onnx        # relative -> resolved against pkg share
     opset: 17
-    cam_width: 640
-    cam_height: 480
-    camera_ip: "127.0.0.1"   # sim: 127.0.0.1    real: Orin IP (e.g. 192.168.123.164)
+
+    raw_frame_width: 640                      # wire-format frame size (hardware mirror)
+    raw_frame_height: 480
+    model_input_width: 57                     # ONNX export size; must match policy training
+    model_input_height: 32
+
+    camera_ip: "127.0.0.1"                    # onboard / sim. Offboard: Orin IP (e.g. 192.168.123.164)
     camera_port: 5555
+
     embedding_topic: /theia_embedding
+    inference_rate_hz: 50.0
+    publish_input_frame: false                # true -> publish post-resize frame for bag recording
+    input_frame_topic: /theia_input_frame
 ```
 
 Edit → re-export → rebuild. Export script, launch file, and node all read from it.
@@ -119,17 +128,49 @@ the package.)
 ### export ONNX + build
 
 ```bash
-pip install torch "transformers==4.41.2" "numpy<2" "Pillow>=9.1" onnx onnxscript onnxruntime einops omegaconf pyyaml
+pip install torch "transformers>=4.42,<4.46" "huggingface-hub<0.30" \
+  "numpy<2" "Pillow>=9.1" onnx onnxscript onnxruntime einops omegaconf pyyaml
 python3 scripts/export_theia_onnx.py
 
 colcon build --symlink-install --packages-select vision_encoders
 source install/setup.bash
 ```
 
+Notes on the pins:
+- `transformers>=4.42` — older versions hit a `nn.functional.interpolate(scale_factor=…)`
+  TypeError during `torch.onnx.export` tracing under torch ≥ 2.3 (vit's
+  `interpolate_pos_encoding`). 4.42+ uses `size=(int, int)` which traces cleanly.
+- `huggingface-hub<0.30` — newer versions pull `hf-xet`, which has no wheel for
+  Python 3.8 / aarch64 (JetPack 5).
+- Theia's HF code uses `match`/`case`, so the export needs Python ≥ 3.10. On
+  JetPack 5 the system Python is 3.8 — use `python3.10` explicitly, or run
+  export on a dev machine and `scp` the `.onnx` over.
+
+#### IR-version downgrade (only when ORT < model IR)
+
+Newer torch (≥ 2.4) exports ONNX with IR v10. The Jetson Orin's onnxruntime
+1.15.x (built for JetPack 5 / CUDA 11.4) caps at IR v9, so loading the freshly
+exported model fails with `Unsupported model IR version: 10`. Downgrade the
+IR field in place — opset-17 ops are all valid under IR v9, so this is purely
+a header rewrite:
+
+```bash
+python3 -c "import onnx; p='models/theia_tiny.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"
+```
+
+Skip this on x86_64 setups using a recent ORT (≥ 1.16 handles IR v10 natively).
+
 ## launch
 
-Real: start `camera_streamer.py` on the Orin first, set `camera_ip` to Orin IP
-in [config/theia_tiny.yaml](config/theia_tiny.yaml). Sim: `unitree_mujoco` serves the same stream on `127.0.0.1`.
+Start the streamer first in its own terminal — it's intentionally decoupled
+from the launch (sudo needs a tty for `mscli stopservice`, and the camera
+release races the node otherwise):
+
+- **Onboard (default)**: `python3 scripts/camera_streamer.py` on the Orin.
+- **Sim**: `unitree_mujoco` already serves the same stream on `127.0.0.1` — skip the streamer.
+- **Offboard dev**: `python3 scripts/camera_streamer.py --bind 0.0.0.0`, then set `camera_ip` in the yaml to the Orin's IP.
+
+Then:
 
 ```bash
 # inference only
@@ -152,7 +193,8 @@ ros2 topic echo /theia_embedding --no-arr
 ## individual scripts
 
 ```bash
-# Orin-side TCP JPEG producer (real hardware)
+# Orin-side TCP frame producer (defaults: JPEG@85, bind 127.0.0.1)
+# flags: --codec {jpeg,png}  --bind <addr>  -v / --verbose
 python3 scripts/camera_streamer.py
 
 # export HuggingFace Theia -> ONNX (reads config/theia_tiny.yaml)
@@ -185,13 +227,15 @@ Images come over raw TCP, not ROS — see `scripts/camera_streamer.py` and
 
 ### changing resolution
 
-1. edit `config/theia_tiny.yaml` → `cam_width` / `cam_height`
-2. `python3 scripts/export_theia_onnx.py`
+The node does two resizes: wire frame → `raw_frame_*` (sanity-mirror of the
+hardware output) → `model_input_*` (the size the ONNX was exported at and the
+policy was trained against).
+
+1. edit `config/theia_tiny.yaml` → `model_input_width` / `model_input_height`
+2. `python3 scripts/export_theia_onnx.py`  &nbsp;# re-exports ONNX at the new size
 3. `colcon build --symlink-install --packages-select vision_encoders`
 
-Incoming JPEGs are resized in the node to `cam_width × cam_height` before
-inference, so the producer resolution doesn't have to match the model — but the
-ONNX export must.
+`raw_frame_*` rarely changes — it mirrors the D435i's native output.
 
 ### project layout
 

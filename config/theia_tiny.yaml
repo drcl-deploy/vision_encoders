@@ -21,8 +21,8 @@ theia_tiny_node:
     # Sim:                 127.0.0.1        (unitree_mujoco on same machine)
     # Onboard:             127.0.0.1        (streamer + node both on Orin;
     #                                        auto-set by launch arg onboard:=true)
-    camera_ip: "192.168.123.164" # real, orin
-    # camera_ip: "127.0.0.1" # sim / onboard
+    # camera_ip: "192.168.123.164" # real, orin
+    camera_ip: "127.0.0.1" # sim / onboard
     camera_port: 5555
 
     # node

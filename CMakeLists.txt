@@ -7,6 +7,7 @@ endif()
 
 # ROS2 dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -48,7 +49,7 @@ set_target_properties(onnxruntime PROPERTIES
 add_executable(theia_tiny_node src/theia_tiny_node.cpp)
 target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
 target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
-ament_target_dependencies(theia_tiny_node rclcpp std_msgs sensor_msgs)
+ament_target_dependencies(theia_tiny_node rclcpp std_msgs sensor_msgs ament_index_cpp)
 
 # The node lives in lib/<PROJECT_NAME>/ but ORT + CUDA libs install to lib/.
 # Set RPATH so the dynamic linker finds them relative to the binary.
@@ -84,6 +85,12 @@ install(
   DIRECTORY scripts/
   DESTINATION share/${PROJECT_NAME}/scripts
   USE_SOURCE_PERMISSIONS
+)
+
+# Install model files
+install(
+  DIRECTORY models/
+  DESTINATION share/${PROJECT_NAME}/models
 )
 
 if(BUILD_TESTING)
