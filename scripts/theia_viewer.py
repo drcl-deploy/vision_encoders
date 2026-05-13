@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Combined viewer: raw frame + model-input frame + Theia embedding heatmap.
 
-Subscribes to `/theia_embedding` and opens a second TCP client to the same
-JPEG stream the inference node reads. Shows two image panels:
+Subscribes to `/theia_embedding` and `/theia_input_frame` (the post-resize,
+pre-normalize frame the ONNX model literally sees), and opens a TCP client
+to the same stream the inference node reads for the raw frame. Three panels:
 
-  - top:    raw_frame_* — what the camera (or sim) actually sends
-  - middle: model_input_* — same frame after the stage-2 resize, i.e. the
-            pixels the ONNX model sees (before ImageNet normalization),
+  - top:    raw_frame_* — what the camera/sim sends over TCP
+  - middle: /theia_input_frame — model_input_* the node feeds to ONNX,
             upscaled with INTER_NEAREST so the pixelation is visible
   - bottom: per-patch embedding heatmap
 
-Reads all sizes from `config/theia_tiny.yaml` so viewer and node stay in
+Sizes are read from `config/theia_tiny.yaml` so viewer and node stay in
 lockstep. Override the config path with `--config /path/to/theia_tiny.yaml`.
+
+Offboard: pass `--camera-ip <orin_wlan0_ip>` to override the yaml's camera_ip
+(the streamer must be running with `--bind 0.0.0.0` on the Orin).
 """
 
 import argparse
@@ -26,6 +29,7 @@ import numpy as np
 import rclpy
 import yaml
 from rclpy.node import Node
+from sensor_msgs.msg import Image
 from std_msgs.msg import Float32MultiArray
 
 HEATMAP_H = 120
@@ -62,6 +66,7 @@ def _load_config(path):
         'raw_frame_height': int(params['raw_frame_height']),
         'model_input_width': int(params['model_input_width']),
         'model_input_height': int(params['model_input_height']),
+        'input_frame_topic': params.get('input_frame_topic', '/theia_input_frame'),
     }
 
 
@@ -95,6 +100,8 @@ class TheiaViewer(Node):
             Float32MultiArray, '/theia_embedding', self._on_embedding, 10)
         self.create_subscription(
             Float32MultiArray, '/theia_stats', self._on_stats, 10)
+        self.create_subscription(
+            Image, cfg['input_frame_topic'], self._on_input_frame, 10)
         self.create_timer(1.0 / 30.0, self._refresh)
 
         self._cam_thread = threading.Thread(target=self._camera_loop, daemon=True)
@@ -103,7 +110,6 @@ class TheiaViewer(Node):
     def _camera_loop(self):
         ip, port = self.cfg['camera_ip'], self.cfg['camera_port']
         raw_w, raw_h = self.cfg['raw_frame_width'], self.cfg['raw_frame_height']
-        m_w, m_h = self.cfg['model_input_width'], self.cfg['model_input_height']
         while not self._stop.is_set():
             try:
                 with socket.create_connection((ip, port), timeout=5.0) as s:
@@ -123,7 +129,6 @@ class TheiaViewer(Node):
                         if img.shape[1] != raw_w or img.shape[0] != raw_h:
                             img = cv2.resize(img, (raw_w, raw_h))
                         self.raw_frame = img
-                        self.model_input_frame = cv2.resize(img, (m_w, m_h))
                         now_t = time.monotonic()
                         if self._cam_last_t:
                             self._cam_fps = _ema(
@@ -133,6 +138,14 @@ class TheiaViewer(Node):
             except OSError as e:
                 self.get_logger().warn(f'Camera TCP: {e}; retrying in 2s')
                 self._stop.wait(2.0)
+
+    def _on_input_frame(self, msg):
+        # Node publishes rgb8; cv2.imshow expects BGR.
+        if msg.encoding != 'rgb8':
+            return
+        arr = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+            msg.height, msg.width, 3)
+        self.model_input_frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
     def _on_embedding(self, msg):
         vec = np.asarray(msg.data, dtype=np.float32)
@@ -169,7 +182,7 @@ class TheiaViewer(Node):
             up = cv2.resize(self.model_input_frame, (display_w, display_h),
                             interpolation=cv2.INTER_NEAREST)
             m_w, m_h = self.cfg['model_input_width'], self.cfg['model_input_height']
-            panels.append(_label(up, f'model input ({m_w}x{m_h}, nearest-up)'))
+            panels.append(_label(up, f'/theia_input_frame ({m_w}x{m_h}, nearest-up)'))
         if self.heatmap_frame is not None:
             panels.append(cv2.resize(self.heatmap_frame, (display_w, HEATMAP_H),
                                      interpolation=cv2.INTER_NEAREST))
@@ -186,9 +199,13 @@ class TheiaViewer(Node):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default=_default_config_path())
+    parser.add_argument('--camera-ip', default=None,
+                        help='override yaml camera_ip (e.g. Orin wlan0 IP for offboard)')
     args, _ = parser.parse_known_args()
 
     cfg = _load_config(args.config)
+    if args.camera_ip:
+        cfg['camera_ip'] = args.camera_ip
     rclpy.init()
     node = TheiaViewer(cfg)
     try:

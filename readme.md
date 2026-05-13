@@ -21,12 +21,12 @@ theia_tiny_node:
     model_input_width: 57                     # ONNX export size; must match policy training
     model_input_height: 32
 
-    camera_ip: "127.0.0.1"                    # onboard / sim. Offboard: Orin IP (e.g. 192.168.123.164)
+    camera_ip: "127.0.0.1"                    # node's TCP target. onboard/sim: 127.0.0.1. Offboard node dev: Orin IP. (Offboard viewer uses --camera-ip)
     camera_port: 5555
 
     embedding_topic: /theia_embedding
     inference_rate_hz: 50.0
-    publish_input_frame: false                # true -> publish post-resize frame for bag recording
+    publish_input_frame: true                 # post-resize frame on /theia_input_frame; viewer + bag both consume it
     input_frame_topic: /theia_input_frame
 ```
 
@@ -164,11 +164,15 @@ Skip this on x86_64 setups using a recent ORT (≥ 1.16 handles IR v10 natively)
 
 Start the streamer first in its own terminal — it's intentionally decoupled
 from the launch (sudo needs a tty for `mscli stopservice`, and the camera
-release races the node otherwise):
+release races the node otherwise). The streamer routes loopback clients
+(127.0.0.0/8) inline from the producer thread, and remote clients via
+per-client sender threads with drop-oldest 1-slot queues, so a slow or dead
+offboard viewer can never stall the onboard inference path.
 
-- **Onboard (default)**: `python3 scripts/camera_streamer.py` on the Orin.
+- **Onboard only (default)**: `python3 scripts/camera_streamer.py` on the Orin.
+- **Onboard + offboard viewer**: `python3 scripts/camera_streamer.py --bind 0.0.0.0` on the Orin (loopback inline, remote viewers threaded).
 - **Sim**: `unitree_mujoco` already serves the same stream on `127.0.0.1` — skip the streamer.
-- **Offboard dev**: `python3 scripts/camera_streamer.py --bind 0.0.0.0`, then set `camera_ip` in the yaml to the Orin's IP.
+- **Offboard node dev** (running the inference node off the Orin): `--bind 0.0.0.0` on the Orin, then set `camera_ip` in the yaml to the Orin's IP on the dev machine.
 
 Then:
 
@@ -176,7 +180,7 @@ Then:
 # inference only
 ros2 launch vision_encoders theia_tiny.launch.py
 
-# + OpenCV viewer (camera frame + embedding heatmap)
+# + OpenCV viewer (raw + /theia_input_frame + embedding heatmap)
 ros2 launch vision_encoders theia_tiny.launch.py viewer:=true
 
 # + joystick-gated bag recorder (A starts, Y/R1 stops)
@@ -188,6 +192,22 @@ quick check:
 
 ```bash
 ros2 topic echo /theia_embedding --no-arr
+```
+
+### offboard viewer
+
+Base station shares the `lab_router` wlan with the Orin's `wlan0` (same
+`ROS_DOMAIN_ID`, DDS-reachable). The viewer subscribes to `/theia_embedding`
+and `/theia_input_frame` over DDS, and opens its own TCP client to the
+streamer for the raw camera frame:
+
+```bash
+# on the Orin
+python3 scripts/camera_streamer.py --bind 0.0.0.0
+ros2 launch vision_encoders theia_tiny.launch.py
+
+# on the base station
+python3 scripts/theia_viewer.py --camera-ip <orin_wlan0_ip>
 ```
 
 ## individual scripts

@@ -30,7 +30,7 @@ theia_tiny_node:
     # When true, also publish the post-resize, pre-normalize input frame on
     # /theia_input_frame (sensor_msgs/Image, rgb8). Pair with `ros2 bag record`
     # via launch arg `record:=...` to capture (frame, embedding) datasets.
-    publish_input_frame: false
+    publish_input_frame: true
     input_frame_topic: /theia_input_frame
     # inference tick rate (Hz). Inference still only fires when a fresh frame
     # is available, so going above the camera FPS just wastes ticks.

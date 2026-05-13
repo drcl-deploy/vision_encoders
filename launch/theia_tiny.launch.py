@@ -9,9 +9,9 @@ Usage:
   ros2 launch vision_encoders theia_tiny.launch.py
   ros2 launch vision_encoders theia_tiny.launch.py viewer:=true
   ros2 launch vision_encoders theia_tiny.launch.py record:=/path/to/dir
-      # ^ enables publish_input_frame, spawns recording_node.py listening to
-      #   /joy + /lowstate (Unitree gamepad). The bag lands at
-      #   <dir>/<YYYYMonDD_HHMM>/, written between an A (start) and Y/R1 (stop).
+      # ^ spawns recording_node.py listening to /joy + /lowstate (Unitree
+      #   gamepad). The bag lands at <dir>/<YYYYMonDD_HHMM>/, written between
+      #   an A (start) and Y/R1 (stop).
   ros2 launch vision_encoders theia_tiny.launch.py viewer:=true record:=/tmp/run
       # ^ all of the above
 """
@@ -24,7 +24,6 @@ from launch.actions import (
     ExecuteProcess,
     OpaqueFunction,
 )
-from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -36,6 +35,7 @@ def generate_launch_description():
     recorder_script = os.path.join(pkg_share, 'scripts', 'recording_node.py')
 
     def _build(context):
+        viewer = LaunchConfiguration('viewer').perform(context).lower() in ('true', '1')
         record_path = LaunchConfiguration('record').perform(context)
         recording = bool(record_path)
         # No existence check on record_path: recording_node appends _<datetime>
@@ -44,9 +44,6 @@ def generate_launch_description():
         # The node resolves a relative `model_path` against its package share
         # dir, so the yaml's "models/theia_tiny.onnx" works as-is.
         node_params = [config_path]
-        # recording requires the post-resize frame on the wire
-        if recording:
-            node_params.append({'publish_input_frame': True})
 
         actions = [
             Node(
@@ -56,12 +53,12 @@ def generate_launch_description():
                 output='screen',
                 parameters=node_params,
             ),
-            ExecuteProcess(
+        ]
+        if viewer:
+            actions.append(ExecuteProcess(
                 cmd=['python3', viewer_script, '--config', config_path],
                 output='screen',
-                condition=IfCondition(LaunchConfiguration('viewer')),
-            ),
-        ]
+            ))
         if recording:
             actions.append(ExecuteProcess(
                 cmd=['python3', recorder_script,
