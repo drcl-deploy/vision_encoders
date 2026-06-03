@@ -1,0 +1,7 @@
+# Pre-built libraries
+thirdparty/
+
+# Exported models
+*.onnx
+*.onnx.data
+models/
