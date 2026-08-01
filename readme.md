@@ -71,6 +71,17 @@ Config ([config/encoder.yaml](config/encoder.yaml)) carries plumbing only —
 camera ip/port, raw frame size, topics, tick rate. Everything model-shaped
 comes from the manifest.
 
+### supported backbones:
+
+| tag | P (grid) | D | cls | gate | size |
+|---|---|---|---|---|---|
+| theia-tiny | 21 (3x7) | 192 | y | 6.4e-06 | 22 MB |
+| siglip2-b16 | 21 (3x7) | 768 | n | 5.2e-05 | 343 MB |
+| dinov2-s | 32 (4x8) | 384 | y | 7.1e-05 | 88 MB |
+| dinov3-splus | 21 (3x7) | 384 | y | 1.1e-05 | 115 MB |
+| tinyclip-39m | 21 (3x7) | 512 | y | 1.5e-05 | 154 MB |
+| clip-b32 | 3 (1x3) | 768 | y | 1.2e-05 | 350 MB |
+
 ## topics
 
 | direction | topic | type | notes |
