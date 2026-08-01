@@ -2,18 +2,23 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>vision_encoders</name>
-  <version>0.0.0</version>
-  <description>ROS2 node for Theia vision encoder inference via ONNX Runtime</description>
+  <version>0.1.0</version>
+  <description>Frozen vision encoders as swappable ONNX artifacts: one C++ node, n backbones</description>
   <maintainer email="lokesha1b2c3@gmail.com">loki</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
 
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>ament_index_cpp</depend>
   <depend>OpenCV</depend>
+  <depend>yaml-cpp</depend>
+
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

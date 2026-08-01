@@ -11,7 +11,15 @@ find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(yaml-cpp REQUIRED)
+
+# Package msgs
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/ImageTokens.msg"
+  DEPENDENCIES std_msgs
+)
 
 # ONNX Runtime GPU — symlink pre-built (or source-built) release into thirdparty/
 # Auto-detects architecture and version. See readme.md.
@@ -45,20 +53,22 @@ set_target_properties(onnxruntime PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_ROOT}/include"
 )
 
-# Theia Tiny Node — unified TCP receiver for both sim and real.
-add_executable(theia_tiny_node src/theia_tiny_node.cpp)
-target_compile_features(theia_tiny_node PUBLIC cxx_std_17)
-target_link_libraries(theia_tiny_node onnxruntime ${OpenCV_LIBS})
-ament_target_dependencies(theia_tiny_node rclcpp std_msgs sensor_msgs ament_index_cpp)
+# The generic encoder node — one binary, model knowledge lives in the artifact.
+add_executable(encoder_node src/encoder_node.cpp)
+target_compile_features(encoder_node PUBLIC cxx_std_17)
+target_link_libraries(encoder_node onnxruntime ${OpenCV_LIBS} yaml-cpp)
+ament_target_dependencies(encoder_node rclcpp std_msgs sensor_msgs ament_index_cpp)
+rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
+target_link_libraries(encoder_node "${cpp_typesupport_target}")
 
 # The node lives in lib/<PROJECT_NAME>/ but ORT + CUDA libs install to lib/.
 # Set RPATH so the dynamic linker finds them relative to the binary.
-set_target_properties(theia_tiny_node PROPERTIES
+set_target_properties(encoder_node PROPERTIES
   INSTALL_RPATH "$ORIGIN/../"
   BUILD_WITH_INSTALL_RPATH FALSE
 )
 
-install(TARGETS theia_tiny_node
+install(TARGETS encoder_node
   DESTINATION lib/${PROJECT_NAME})
 
 # Install ONNX Runtime shared libs alongside the node
@@ -68,30 +78,11 @@ install(
   FILES_MATCHING PATTERN "*.so*"
 )
 
-# Install config
-install(
-  DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config
-)
-
-# Install launch files
-install(
-  DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch
-)
-
-# Install scripts
-install(
-  DIRECTORY scripts/
-  DESTINATION share/${PROJECT_NAME}/scripts
-  USE_SOURCE_PERMISSIONS
-)
-
-# Install model files
-install(
-  DIRECTORY models/
-  DESTINATION share/${PROJECT_NAME}/models
-)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY scripts/ DESTINATION share/${PROJECT_NAME}/scripts
+        USE_SOURCE_PERMISSIONS)
+install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

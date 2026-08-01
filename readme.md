@@ -1,279 +1,109 @@
-vision encoders
+# vision encoders
 
-One node, one wire format. Sim and real both push frames over TCP
-(`<uint32 LE length><JPEG-or-PNG bytes>` — opencv sniffs the magic bytes); the
-node decodes, resizes, runs Theia-Tiny on CUDA, and publishes patch tokens on
-`/theia_embedding`.
+Frozen vision backbones as swappable ONNX artifacts: **one C++ node, n models,
+zero per-model code.** Sim and real both push frames over TCP
+(`<uint32 LE length><JPEG-or-PNG bytes>`); the node decodes, resizes, feeds the
+graph (all preprocessing baked in at export), and publishes patch + CLS tokens
+on `/enc/tokens` (`msg/ImageTokens`). Design + rationale: [docs/method.md](docs/method.md).
 
-## config
+This package only does **inference**. Artifacts are exported from vibe:
 
-Single source of truth: `config/theia_tiny.yaml`
-
-```yaml
-theia_tiny_node:
-  ros__parameters:
-    hf_name: theaiinstitute/theia-tiny-patch16-224-cddsv
-    model_path: models/theia_tiny.onnx        # relative -> resolved against pkg share
-    opset: 17
-
-    raw_frame_width: 640                      # wire-format frame size (hardware mirror)
-    raw_frame_height: 480
-    model_input_width: 57                     # ONNX export size; must match policy training
-    model_input_height: 32
-
-    camera_ip: "127.0.0.1"                    # node's TCP target. onboard/sim: 127.0.0.1. Offboard node dev: Orin IP. (Offboard viewer uses --camera-ip)
-    camera_port: 5555
-
-    embedding_topic: /theia_embedding
-    inference_rate_hz: 50.0
-    publish_input_frame: true                 # post-resize frame on /theia_input_frame; viewer + bag both consume it
-    input_frame_topic: /theia_input_frame
+```bash
+# in the vibe repo / mjlab env — config: src/vibe/export/encoder/export_enc.yaml
+export-encoder --tag theia-tiny --out <this_pkg>/models/
+export-encoder --out <this_pkg>/models/          # the whole roster
 ```
 
-Edit → re-export → rebuild. Export script, launch file, and node all read from it.
+Each artifact = `<tag>.onnx` + `<tag>.manifest.json` (vision.onnx.v1 — input
+size/layout, patch grid, token dims, CLS presence). The node validates manifest
+vs graph at startup and fails loud. `.onnx` files are arch-neutral: export on
+x86, run on the Orin.
 
 ## install
 
 ### thirdparty
 
-Same pattern as [cpp_control](../cpp_control/readme.md#install) — drop pre-built
-libraries into [thirdparty](./thirdparty/) and CMake picks them up. CUDA is
-required for this node; there is no CPU fallback.
+Same pattern as [cpp_control](../cpp_control/readme.md#install) — symlink a
+pre-built `onnxruntime-linux-<arch>-gpu-<version>` into [thirdparty](./thirdparty/)
+and CMake picks the newest. CUDA is required; no CPU fallback.
 
-**1. onnxruntime-gpu**
+- **x86_64**: [pre-built release](https://github.com/microsoft/onnxruntime/releases), extract + symlink.
+- **aarch64 (Orin)**: build from source (ORT 1.15.x for JetPack 5 / CUDA 11.4,
+  1.22+ for JetPack 6 / CUDA 12.x) — recipe in git history or ORT docs.
+- CUDA/cuDNN runtime `.so`s can be plucked from the NVIDIA pip wheels into the
+  ORT `lib/` dir (`nvidia-cudnn-cu12`, `nvidia-cublas-cu12`, …) + one
+  `patchelf --set-rpath '$ORIGIN' libonnxruntime_providers_cuda.so`.
 
-CMake auto-detects architecture and version — just drop a
-`onnxruntime-linux-<arch>-gpu-<version>` directory into `thirdparty/`.
+JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
+`python3 -c "import onnx; p='models/<tag>.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"`
 
-**x86_64 (desktop/workstation):** download a pre-built release, e.g.
-[`onnxruntime-linux-x64-gpu-1.22.0.tgz`](https://github.com/microsoft/onnxruntime/releases/tag/v1.22.0),
-extract, and symlink:
-
-```bash
-ln -s /PATH/TO/onnxruntime-linux-x64-gpu-1.22.0 ./vision_encoders/thirdparty/
-```
-
-**aarch64 (Jetson Orin):** no pre-built GPU release exists — build from source.
-Use a version compatible with your JetPack's CUDA (e.g. ORT 1.15.x for CUDA 11.4
-on JetPack 5, ORT 1.22+ for CUDA 12.x on JetPack 6):
+### build
 
 ```bash
-git clone --recursive --branch v1.15.1 --depth 1 \
-  https://github.com/microsoft/onnxruntime.git
-cd onnxruntime
-python3 tools/ci_build/build.py \
-  --config Release --build_shared_lib --parallel \
-  --use_cuda --cuda_home /usr/local/cuda \
-  --cudnn_home /usr/lib/aarch64-linux-gnu \
-  --skip_tests --allow_running_as_root --build_dir build \
-  --cmake_extra_defines CMAKE_C_COMPILER=gcc-11 CMAKE_CXX_COMPILER=g++-11
-
-# Package into the expected layout
-mkdir -p onnxruntime-linux-aarch64-gpu-1.15.1/{lib,include}
-cp build/Release/libonnxruntime*.so* onnxruntime-linux-aarch64-gpu-1.15.1/lib/
-cp include/onnxruntime/core/session/*.h onnxruntime-linux-aarch64-gpu-1.15.1/include/
-
-ln -s /PATH/TO/onnxruntime-linux-aarch64-gpu-1.15.1 ./vision_encoders/thirdparty/
-```
-
-**2. CUDA 12.x + cuDNN 9.x runtime libs**
-
-The ORT prebuilt is linked against CUDA 12.x / cuDNN 9.x. If your system doesn't
-already have them (check with `ldconfig -p | grep libcudnn.so.9`), the cleanest
-way — no `sudo`, no driver changes, no conflict with conda training envs — is to
-pull them from the NVIDIA pip wheels and drop the `.so` files next to the
-onnxruntime libs.
-
-```bash
-mkdir -p /tmp/cuda_grab
-pip3 install --target=/tmp/cuda_grab \
-  nvidia-cudnn-cu12==9.* nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 \
-  nvidia-cuda-nvrtc-cu12 nvidia-curand-cu12 nvidia-cufft-cu12
-
-DEST=./vision_encoders/thirdparty/onnxruntime-linux-x64-gpu-<version>/lib
-cp -av /tmp/cuda_grab/nvidia/cudnn/lib/libcudnn*.so*         $DEST/
-cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublas*.so*       $DEST/
-cp -av /tmp/cuda_grab/nvidia/cublas/lib/libcublasLt*.so*     $DEST/
-cp -av /tmp/cuda_grab/nvidia/cuda_runtime/lib/libcudart*.so* $DEST/
-cp -av /tmp/cuda_grab/nvidia/cuda_nvrtc/lib/libnvrtc*.so*    $DEST/
-cp -av /tmp/cuda_grab/nvidia/curand/lib/libcurand*.so*       $DEST/
-cp -av /tmp/cuda_grab/nvidia/cufft/lib/libcufft*.so*         $DEST/
-
-rm -rf /tmp/cuda_grab
-```
-
-The ORT provider `.so` ships without RUNPATH, so patch it once after extracting:
-
-```bash
-pip3 install patchelf   # if not already installed
-patchelf --set-rpath '$ORIGIN' $DEST/libonnxruntime_providers_cuda.so
-```
-
-The CMake `install()` rule ships every `*.so*` from that dir into
-`install/lib/`, and the node binary's RPATH points back to that dir, so
-the runtime deps travel with the built node.
-
-Sanity-check before launching:
-
-```bash
-ldd install/vision_encoders/lib/libonnxruntime_providers_cuda.so \
-  | grep -E 'cudnn|cublas|cudart|curand|cufft'
-# expect all resolved — no "not found"
-```
-
-(System apt `libcudnn9-cuda-12` / `cuda-runtime-12-6` etc. also works if you
-prefer that route; the wheel-pluck above just keeps everything contained inside
-the package.)
-
-### export ONNX + build
-
-```bash
-pip install torch "transformers>=4.42,<4.46" "huggingface-hub<0.30" \
-  "numpy<2" "Pillow>=9.1" onnx onnxscript onnxruntime einops omegaconf pyyaml
-python3 scripts/export_theia_onnx.py
-
 colcon build --symlink-install --packages-select vision_encoders
 source install/setup.bash
 ```
 
-Notes on the pins:
-- `transformers>=4.42` — older versions hit a `nn.functional.interpolate(scale_factor=…)`
-  TypeError during `torch.onnx.export` tracing under torch ≥ 2.3 (vit's
-  `interpolate_pos_encoding`). 4.42+ uses `size=(int, int)` which traces cleanly.
-- `huggingface-hub<0.30` — newer versions pull `hf-xet`, which has no wheel for
-  Python 3.8 / aarch64 (JetPack 5).
-- Theia's HF code uses `match`/`case`, so the export needs Python ≥ 3.10. On
-  JetPack 5 the system Python is 3.8 — use `python3.10` explicitly, or run
-  export on a dev machine and `scp` the `.onnx` over.
+## run
 
-#### IR-version downgrade (only when ORT < model IR)
-
-Newer torch (≥ 2.4) exports ONNX with IR v10. The Jetson Orin's onnxruntime
-1.15.x (built for JetPack 5 / CUDA 11.4) caps at IR v9, so loading the freshly
-exported model fails with `Unsupported model IR version: 10`. Downgrade the
-IR field in place — opset-17 ops are all valid under IR v9, so this is purely
-a header rewrite:
-
-```bash
-python3 -c "import onnx; p='models/theia_tiny.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"
-```
-
-Skip this on x86_64 setups using a recent ORT (≥ 1.16 handles IR v10 natively).
-
-## launch
-
-Start the streamer first in its own terminal — it's intentionally decoupled
-from the launch (sudo needs a tty for `mscli stopservice`, and the camera
-release races the node otherwise). The streamer routes loopback clients
-(127.0.0.0/8) inline from the producer thread, and remote clients via
-per-client sender threads with drop-oldest 1-slot queues, so a slow or dead
-offboard viewer can never stall the onboard inference path.
-
-- **Onboard only (default)**: `python3 scripts/camera_streamer.py` on the Orin.
-- **Onboard + offboard viewer**: `python3 scripts/camera_streamer.py --bind 0.0.0.0` on the Orin (loopback inline, remote viewers threaded).
-- **Sim**: `unitree_mujoco` already serves the same stream on `127.0.0.1` — skip the streamer.
-- **Offboard node dev** (running the inference node off the Orin): `--bind 0.0.0.0` on the Orin, then set `camera_ip` in the yaml to the Orin's IP on the dev machine.
-
-Then:
-
-```bash
-# inference only
-ros2 launch vision_encoders theia_tiny.launch.py
-
-# + OpenCV viewer (raw + /theia_input_frame + embedding heatmap)
-ros2 launch vision_encoders theia_tiny.launch.py viewer:=true
-
-# + joystick-gated bag recorder (A starts, Y/R1 stops)
-# bag lands at <dir>/<YYYYMonDD_HHMM>/
-ros2 launch vision_encoders theia_tiny.launch.py record:=/path/to/scenario_dir
-```
-
-quick check:
-
-```bash
-ros2 topic echo /theia_embedding --no-arr
-```
-
-### offboard viewer
-
-Base station shares the `lab_router` wlan with the Orin's `wlan0` (same
-`ROS_DOMAIN_ID`, DDS-reachable). The viewer subscribes to `/theia_embedding`
-and `/theia_input_frame` over DDS, and opens its own TCP client to the
-streamer for the raw camera frame:
+Start the streamer first, in its own terminal (sudo needs a tty; the camera
+release races the node otherwise). Sim (`unitree_mujoco`) serves the same wire
+on `127.0.0.1` — skip the streamer.
 
 ```bash
 # on the Orin
-python3 scripts/camera_streamer.py --bind 0.0.0.0
-ros2 launch vision_encoders theia_tiny.launch.py
+python3 scripts/camera_streamer.py                 # loopback only
+python3 scripts/camera_streamer.py --bind 0.0.0.0  # + offboard viewers
 
-# on the base station
-python3 scripts/theia_viewer.py --camera-ip <orin_wlan0_ip>
+# then, anywhere the workspace is sourced:
+ros2 launch vision_encoders encoder.launch.py                    # yaml's model
+ros2 launch vision_encoders encoder.launch.py model:=dinov2-s
+ros2 launch vision_encoders encoder.launch.py viewer:=true
+
+# offboard viewer (base station, same ROS_DOMAIN_ID):
+python3 scripts/viewer.py --camera-ip <orin_wlan0_ip>
+
+# quick check
+ros2 topic echo /enc/tokens --no-arr
 ```
 
-## individual scripts
-
-```bash
-# Orin-side TCP frame producer (defaults: JPEG@85, bind 127.0.0.1)
-# flags: --codec {jpeg,png}  --bind <addr>  -v / --verbose
-python3 scripts/camera_streamer.py
-
-# export HuggingFace Theia -> ONNX (reads config/theia_tiny.yaml)
-python3 scripts/export_theia_onnx.py
-
-# standalone live viewer (node must be running)
-python3 scripts/theia_viewer.py
-
-# scrub an IsaacLab fpv_dataset.pt interactively
-python3 scripts/fpv_dataset_viewer.py --dataset /path/to/fpv_dataset_dir
-
-# A/B compare IsaacLab dataset vs recorded rollout
-python3 scripts/domain_comparison.py --source /path/to/fpv_dataset_dir --target /path/to/bag_dir
-
-# C++ <-> IsaacLab encoder parity test (MSE / cosine)
-python3 tests/implementation_consistency.py --dataset /path/to/fpv_dataset_dir
-```
+Config ([config/encoder.yaml](config/encoder.yaml)) carries plumbing only —
+camera ip/port, raw frame size, topics, tick rate. Everything model-shaped
+comes from the manifest.
 
 ## topics
 
-| direction | topic | type | shape |
-|-----------|-------|------|-------|
-| pub | `/theia_embedding`     | `Float32MultiArray` | (H/16)*(W/16) × 192, layout-encoded |
-| pub | `/theia_input_frame`   | `sensor_msgs/Image` (rgb8) | post-resize, pre-norm; only when recording |
+| direction | topic | type | notes |
+|---|---|---|---|
+| pub | `/enc/tokens` | `vision_encoders/ImageTokens` | stamp = capture time; `patches` = (P, D) row-major, memcpy-able into a policy kv port; `cls` empty for CLS-less backbones; decode/infer ms ride along |
+| pub | `/enc/frame` | `sensor_msgs/Image` (bgr8) | the model-input frame, as the graph sees it |
 
-Images come over raw TCP, not ROS — see `scripts/camera_streamer.py` and
-`unitree_sdk2_bridge.h::G1Bridge::renderCamera` for producers.
+## bench
 
-## dev guide
+```bash
+python3 tests/fps.py                       # every artifact in models/
+python3 tests/fps.py --models theia-tiny dinov2-s --duration 20
+```
 
-### changing resolution
+Self-contained (spawns the node + its own frame producer); dumps
+`tests/bench/bench_<ts>.{csv,png}` — tokens Hz, decode/infer ms, cpu, rss,
+gpu util/mem per model. Measured (RTX, 640x480 wire @ 60 fps, 112x63 input):
+all six roster tags hold 60 Hz, infer 4–5.5 ms.
 
-The node does two resizes: wire frame → `raw_frame_*` (sanity-mirror of the
-hardware output) → `model_input_*` (the size the ONNX was exported at and the
-policy was trained against).
-
-1. edit `config/theia_tiny.yaml` → `model_input_width` / `model_input_height`
-2. `python3 scripts/export_theia_onnx.py`  &nbsp;# re-exports ONNX at the new size
-3. `colcon build --symlink-install --packages-select vision_encoders`
-
-`raw_frame_*` rarely changes — it mirrors the D435i's native output.
-
-### project layout
+## layout
 
 ```
 vision_encoders/
-├── config/
-│   ├── theia_tiny.yaml                         # single source of truth
-│   └── theia_tiny_consistency_test.yaml        # parity-test override (no-op resizes)
-├── launch/theia_tiny.launch.py
+├── msg/ImageTokens.msg          # the one token message
+├── src/encoder_node.cpp         # THE node — manifest-validated, zero model math
+├── config/encoder.yaml          # plumbing only
+├── launch/encoder.launch.py     # model:=<tag> [viewer:=true]
 ├── scripts/
-│   ├── camera_streamer.py                      # Orin-side TCP JPEG producer (real)
-│   ├── export_theia_onnx.py                    # HF model -> ONNX
-│   ├── theia_viewer.py                         # live camera + heatmap
-│   ├── fpv_dataset_viewer.py                   # scrub IsaacLab fpv dataset
-│   ├── domain_comparison.py                    # sim vs rollout side-by-side
-│   └── recording_node.py                       # joystick-gated bag writer
-├── tests/implementation_consistency.py         # C++/IsaacLab encoder parity
-├── src/theia_tiny_node.cpp                     # ROS 2 inference node (CUDA-only)
-├── thirdparty/onnxruntime-linux-<arch>-gpu-<ver> # (symlink, see install)
-└── models/theia_tiny.onnx                      # (created by export script)
+│   ├── camera_streamer.py       # Orin-side TCP producer (real robot)
+│   ├── viewer.py                # generic 3-panel viewer (grid/dim from the msg)
+│   └── wire.py                  # the one python TCP wire impl
+├── tests/fps.py                 # zoo bench
+├── docs/method.md               # design + rationale
+├── thirdparty/onnxruntime-...   # (symlink)
+└── models/<tag>.{onnx,manifest.json}   # export-encoder output (untracked)
 ```

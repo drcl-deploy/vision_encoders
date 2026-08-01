@@ -1,0 +1,25 @@
+encoder_node:
+  ros__parameters:
+    # default artifact tag -> <share>/models/<tag>.{onnx,manifest.json}
+    # (launch arg model:= overrides; model_path/manifest_path for absolute paths)
+    model: theia-tiny
+
+    # raw frame size on the wire (mirrors the hardware camera; sim sends the same).
+    # model input size comes from the MANIFEST — never configured here.
+    raw_frame_width: 640
+    raw_frame_height: 480
+
+    # TCP camera source — wire format of scripts/camera_streamer.py and the
+    # sim's head-camera TCP server in unitree_sdk2_bridge.h.
+    # Offboard node dev: 192.168.123.164 (Orin). Sim / onboard: 127.0.0.1.
+    camera_ip: "127.0.0.1"
+    camera_port: 5555
+
+    # inference tick (Hz) — fires only on a fresh frame, so going above the
+    # camera FPS just wastes ticks.
+    inference_rate_hz: 50.0
+
+    # topics — model-agnostic by design (no backbone name anywhere)
+    tokens_topic: /enc/tokens
+    publish_frame: true          # model-input frame (bgr8) for viewer / bagging
+    frame_topic: /enc/frame
