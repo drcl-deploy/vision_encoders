@@ -5,3 +5,7 @@ thirdparty/
 *.onnx
 *.onnx.data
 models/
+
+# bench outputs
+tests/bench/
+__pycache__/
