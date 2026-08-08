@@ -58,8 +58,16 @@ add_executable(encoder_node src/encoder_node.cpp)
 target_compile_features(encoder_node PUBLIC cxx_std_17)
 target_link_libraries(encoder_node onnxruntime ${OpenCV_LIBS} yaml-cpp)
 ament_target_dependencies(encoder_node rclcpp std_msgs sensor_msgs ament_index_cpp)
-rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(encoder_node "${cpp_typesupport_target}")
+if(COMMAND rosidl_get_typesupport_target)
+  # Galactic and newer.
+  rosidl_get_typesupport_target(cpp_typesupport_target
+    ${PROJECT_NAME} "rosidl_typesupport_cpp")
+  target_link_libraries(encoder_node "${cpp_typesupport_target}")
+else()
+  # Foxy compatibility: rosidl_get_typesupport_target() is not available.
+  rosidl_target_interfaces(encoder_node
+    ${PROJECT_NAME} "rosidl_typesupport_cpp")
+endif()
 
 # The node lives in lib/<PROJECT_NAME>/ but ORT + CUDA libs install to lib/.
 # Set RPATH so the dynamic linker finds them relative to the binary.

@@ -16,21 +16,18 @@ so viewer and node stay in lockstep; `--camera-ip` overrides for offboard use
 
 import argparse
 import os
-import sys
 import threading
 import time
 
 import cv2
 import numpy as np
 import rclpy
-import yaml
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import wire  # noqa: E402
-
-from vision_encoders.msg import ImageTokens  # noqa: E402
+from vision_encoders.msg import ImageTokens
+import wire
+import yaml
 
 HEATMAP_H = 120
 FPS_EMA_ALPHA = 0.1
@@ -68,6 +65,8 @@ def _load_config(path):
 
 
 class EncoderViewer(Node):
+    """Display the camera, model input, and encoder tokens."""
+
     def __init__(self, cfg):
         super().__init__('encoder_viewer')
         self.cfg = cfg
@@ -86,8 +85,18 @@ class EncoderViewer(Node):
         self._decode_ms = 0.0
         self._infer_ms = 0.0
 
-        self.create_subscription(ImageTokens, cfg['tokens_topic'], self._on_tokens, 1)
-        self.create_subscription(Image, cfg['frame_topic'], self._on_frame, 1)
+        # The encoder may be reached through cdr_tcp_bridge, whose offboard
+        # publishers intentionally use best-effort/latest-only QoS. A reliable
+        # subscription is incompatible with a best-effort publisher, so make
+        # the viewer's telemetry QoS explicit while retaining one fresh sample.
+        telemetry_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self.create_subscription(
+            ImageTokens, cfg['tokens_topic'], self._on_tokens, telemetry_qos)
+        self.create_subscription(Image, cfg['frame_topic'], self._on_frame, telemetry_qos)
         self.create_timer(1.0 / 30.0, self._refresh)
 
         threading.Thread(target=self._camera_loop, daemon=True).start()
