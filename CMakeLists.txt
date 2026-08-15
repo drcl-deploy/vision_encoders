@@ -56,6 +56,7 @@ set_target_properties(onnxruntime PROPERTIES
 # The generic encoder node — one binary, model knowledge lives in the artifact.
 add_executable(encoder_node src/encoder_node.cpp)
 target_compile_features(encoder_node PUBLIC cxx_std_17)
+target_include_directories(encoder_node PRIVATE include)
 target_link_libraries(encoder_node onnxruntime ${OpenCV_LIBS} yaml-cpp)
 ament_target_dependencies(encoder_node rclcpp std_msgs sensor_msgs ament_index_cpp)
 if(COMMAND rosidl_get_typesupport_target)
@@ -85,6 +86,11 @@ install(
   DESTINATION lib
   FILES_MATCHING PATTERN "*.so*"
 )
+
+# frame_wire.hpp is header-only and consumed by other packages (cpp_control's
+# sys1 reads the depth plane off the same wire the encoder reads colour from).
+install(DIRECTORY include/ DESTINATION include)
+ament_export_include_directories(include)
 
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)

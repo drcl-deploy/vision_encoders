@@ -7,14 +7,19 @@
  * measured facts in the manifest. What remains here: TCP frame in -> resize ->
  * memcpy BGR HWC uint8 -> run -> publish ImageTokens. Zero per-model code.
  *
- * Producers on the other end of the TCP wire (4-byte LE length + JPEG/PNG):
+ * Producers on the other end of the TCP wire (4-byte LE length + payload):
  *   - real robot: camera_streamer.py on the Orin
  *   - sim:        unitree_mujoco's head-camera TCP server in unitree_sdk2_bridge.h
+ *
+ * The payload is either legacy JPEG/PNG bytes or a multi-plane record carrying
+ * colour + depth (frame_wire.hpp). This node only ever wants the colour plane;
+ * depth is sys1's business. One parser, both consumers.
  */
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_encoders/msg/image_tokens.hpp>
+#include <vision_encoders/frame_wire.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
@@ -260,7 +265,13 @@ private:
 
         const auto stamp = this->now();
         const auto t0 = std::chrono::steady_clock::now();
-        cv::Mat img = cv::imdecode(payload, cv::IMREAD_COLOR);  // BGR
+        vision_encoders::wire::Frame wf;
+        if (!vision_encoders::wire::parse(payload, wf)) continue;
+        const auto * colour = wf.find(vision_encoders::wire::Kind::COLOR);
+        if (!colour) continue;
+        const cv::Mat encoded(1, static_cast<int>(colour->nbytes), CV_8UC1,
+                              const_cast<uint8_t *>(colour->data));
+        cv::Mat img = cv::imdecode(encoded, cv::IMREAD_COLOR);  // BGR
         if (img.empty()) continue;
         // Stage-1 resize: wire -> raw_frame_* (hardware-mirror sanity step).
         if (img.cols != raw_frame_width_ || img.rows != raw_frame_height_) {

@@ -54,6 +54,7 @@ on `127.0.0.1` — skip the streamer.
 # on the Orin
 python3 scripts/camera_streamer.py                 # loopback only
 python3 scripts/camera_streamer.py --bind 0.0.0.0  # + offboard viewers
+python3 scripts/camera_streamer.py --depth         # + a depth plane (sys1)
 
 # then, anywhere the workspace is sourced:
 ros2 launch vision_encoders encoder.launch.py                    # yaml's model
@@ -70,6 +71,27 @@ ros2 topic echo /enc/tokens --no-arr
 Config ([config/encoder.yaml](config/encoder.yaml)) carries plumbing only —
 camera ip/port, raw frame size, topics, tick rate. Everything model-shaped
 comes from the manifest.
+
+### the camera wire
+
+`u32 LE length + payload`, one socket. Without `--depth` the payload is JPEG or
+PNG bytes and nothing has changed; with it, the payload is a self-describing
+multi-plane record — colour and depth in ONE record, so a consumer never pairs
+two streams by timestamp. One parser for every consumer:
+[include/vision_encoders/frame_wire.hpp](include/vision_encoders/frame_wire.hpp).
+
+```
+payload := <JPEG|PNG bytes>                    # legacy, colour only
+         | "VD1" u8 nplanes plane[nplanes]
+plane   := u8 kind | u8 fmt | u16 w | u16 h | f32 fx,fy,cx,cy | u32 n | bytes
+```
+
+Intrinsics are per-plane, in that plane's own pixels, so consumers need no
+camera config. Depth ships raw `u16` millimetres at 160×120 (38 KB, no encode —
+PNG-16 at full res costs 10–25 ms on the Orin) and `rs.align` runs only on the
+frames that carry one (`--depth-hz`). `encoder_node` takes the colour plane and
+ignores the rest; depth is [cpp_control's sys1](../cpp_control/docs/sys1.md).
+The sim serves the same wire — `camera_depth: 1` in `unitree_mujoco/simulate/config.yaml`.
 
 ### supported backbones:
 

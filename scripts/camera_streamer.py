@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """Stream D435i frames over a length-prefixed TCP socket.
 
-Wire format: 4-byte little-endian payload length + JPEG-or-PNG bytes. Consumers
-decode via opencv's magic-byte sniffing (cv::imdecode accepts both).
+Wire format: 4-byte little-endian payload length + payload. Without `--depth`
+the payload is JPEG-or-PNG bytes and every byte is as it always was; with it,
+the payload is the self-describing multi-plane record parsed by
+`include/vision_encoders/frame_wire.hpp` (colour + depth in ONE record, so a
+consumer never has to pair two streams by timestamp).
+
+Depth ships RAW uint16 millimetres, already downscaled: sys1 classifies at
+160 px and NEAREST-resizes depth to match, so 160x120 raw is 38 KB and 0 ms of
+encode — smaller than the JPEG. PNG-16 at full res costs 10-25 ms on the Orin
+and would blow the 60 Hz loop. `rs.align(color)` runs ONLY on the frames that
+carry a depth plane (`--depth-hz`), for the same reason.
+
+Intrinsics ride per-plane, in that plane's own pixels, so consumers need no
+camera config and the depth downscale stays exact.
 
 Default bind is 127.0.0.1 — the streamer + consumer normally run on the same
 Orin. Pass `--bind 0.0.0.0` for offboard viewers (base station).
@@ -19,6 +31,7 @@ Workflow (Orin):
     python3 camera_streamer.py                            # JPEG, loopback only
     python3 camera_streamer.py --bind 0.0.0.0             # accept offboard too
     python3 camera_streamer.py --codec png -v             # PNG + per-sec fps log
+    python3 camera_streamer.py --depth                    # + depth for sys1
 
 Why bypass DDS at all:
     Unitree's videohub_pc4 publishes via CycloneDDS 0.7; the desktop's
@@ -51,6 +64,23 @@ ENCODERS = {
     "jpeg": (".jpg", [cv2.IMWRITE_JPEG_QUALITY, 85]),
     "png":  (".png", [cv2.IMWRITE_PNG_COMPRESSION, 1]),
 }
+
+# frame_wire.hpp — keep the two in step; the C++ side is the reference.
+MAGIC = b"VD1"
+KIND_COLOR, KIND_DEPTH = 0, 1
+FMT_RAW_U16_MM, FMT_JPEG, FMT_PNG = 0, 1, 2
+_PLANE = struct.Struct("<BBHHffffI")
+
+
+def _plane(kind, fmt, w, h, intr, payload):
+    """One wire plane: fixed header + bytes. `intr` = (fx, fy, cx, cy)."""
+    return _PLANE.pack(kind, fmt, w, h, *intr, len(payload)) + payload
+
+
+def _scaled_intrinsics(intr, w, h):
+    """Colour intrinsics expressed in a downscaled plane's own pixels."""
+    sx, sy = w / intr.width, h / intr.height
+    return (intr.fx * sx, intr.fy * sy, intr.ppx * sx, intr.ppy * sy)
 
 
 def stop_unitree_video_service():
@@ -126,9 +156,18 @@ def main():
                     help="frame codec (default: jpeg)")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="log per-second fps, payload size, client counts")
+    ap.add_argument("--depth", action="store_true",
+                    help="attach a depth plane (multi-plane wire) — needed by sys1")
+    ap.add_argument("--depth-size", default="160x120",
+                    help="depth plane WxH; sys1 classifies at 160 px (default: 160x120)")
+    ap.add_argument("--depth-hz", type=float, default=10.0,
+                    help="depth plane rate; align() runs only on these frames (default: 10)")
     args = ap.parse_args()
 
     ext, encode_params = ENCODERS[args.codec]
+    codec_fmt = FMT_JPEG if args.codec == "jpeg" else FMT_PNG
+    dw, dh = (int(v) for v in args.depth_size.lower().split("x"))
+    depth_period = FPS / max(args.depth_hz, 1e-6)
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     stop_unitree_video_service()
@@ -136,8 +175,18 @@ def main():
     pipe = rs.pipeline()
     cfg = rs.config()
     cfg.enable_stream(rs.stream.color, WIDTH, HEIGHT, rs.format.bgr8, FPS)
-    pipe.start(cfg)
-    print(f"Camera started: {WIDTH}x{HEIGHT} @ {FPS}fps  codec={args.codec}", flush=True)
+    if args.depth:
+        cfg.enable_stream(rs.stream.depth, WIDTH, HEIGHT, rs.format.z16, FPS)
+    profile = pipe.start(cfg)
+    color_intr = profile.get_stream(
+        rs.stream.color).as_video_stream_profile().get_intrinsics()
+    align = rs.align(rs.stream.color) if args.depth else None
+    depth_scale_mm = (1000.0 * profile.get_device().first_depth_sensor().get_depth_scale()
+                      if args.depth else 0.0)
+    color_intrinsics = _scaled_intrinsics(color_intr, WIDTH, HEIGHT)
+    depth_intrinsics = _scaled_intrinsics(color_intr, dw, dh)  # aligned to colour
+    print(f"Camera started: {WIDTH}x{HEIGHT} @ {FPS}fps  codec={args.codec}"
+          + (f"  depth={dw}x{dh} @ {args.depth_hz:g}Hz" if args.depth else ""), flush=True)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -165,14 +214,37 @@ def main():
 
     threading.Thread(target=accept_loop, daemon=True).start()
 
-    last_log, log_count = time.time(), 0
+    last_log, log_count, frame_i, depth_due = time.time(), 0, 0, 0.0
     while True:
-        color = pipe.wait_for_frames().get_color_frame()
+        frames = pipe.wait_for_frames()
+        # Decimated: align() is the expensive half of a depth frame, so only pay
+        # it on the frames that actually carry one.
+        want_depth = args.depth and frame_i >= depth_due
+        if want_depth:
+            frames = align.process(frames)
+            depth_due = frame_i + depth_period
+        color = frames.get_color_frame()
         if not color:
             continue
+        frame_i += 1
         img = np.asanyarray(color.get_data())
         _, buf = cv2.imencode(ext, img, encode_params)
-        payload = struct.pack("<I", len(buf)) + buf.tobytes()
+
+        if not args.depth:
+            body = buf.tobytes()                       # legacy wire, unchanged
+        else:
+            planes = _plane(KIND_COLOR, codec_fmt, WIDTH, HEIGHT,
+                            color_intrinsics, buf.tobytes())
+            depth = frames.get_depth_frame() if want_depth else None
+            if depth:
+                z = np.asanyarray(depth.get_data())    # uint16, sensor units
+                z = cv2.resize(z, (dw, dh), interpolation=cv2.INTER_NEAREST)
+                if abs(depth_scale_mm - 1.0) > 1e-6:
+                    z = (z.astype(np.float32) * depth_scale_mm).astype(np.uint16)
+                planes += _plane(KIND_DEPTH, FMT_RAW_U16_MM, dw, dh,
+                                 depth_intrinsics, np.ascontiguousarray(z).tobytes())
+            body = MAGIC + bytes([1 + bool(depth)]) + planes
+        payload = struct.pack("<I", len(body)) + body
 
         with clients_lock:
             lb_snapshot = list(loopback)
