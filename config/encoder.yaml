@@ -11,7 +11,8 @@ encoder_node:
 
     # TCP camera source — wire format of scripts/camera_streamer.py and the
     # sim's head-camera TCP server in unitree_sdk2_bridge.h.
-    # Offboard node dev: 192.168.123.164 (Orin). Sim / onboard: 127.0.0.1.
+    # Launch defaults this from VIBE_CAMERA_ADDRESS. This loopback value is the
+    # fallback for both the onboard camera streamer and local simulator.
     camera_ip: "127.0.0.1"
     camera_port: 5555
 

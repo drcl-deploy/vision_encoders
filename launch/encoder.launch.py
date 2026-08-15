@@ -1,4 +1,5 @@
-"""Launch the generic encoder node (+ optional viewer).
+"""
+Launch the generic encoder node (+ optional viewer).
 
 The camera streamer is NOT launched here — run it manually in its own terminal
 *before* invoking this launch (sudo needs a tty + the camera release is racy
@@ -27,8 +28,9 @@ def generate_launch_description():
     def _build(context):
         viewer = LaunchConfiguration('viewer').perform(context).lower() in ('true', '1')
         model = LaunchConfiguration('model').perform(context)
+        camera_ip = LaunchConfiguration('camera_ip').perform(context)
 
-        params = [config_path]
+        params = [config_path, {'camera_ip': camera_ip}]
         if model:
             params.append({'model': model})
 
@@ -51,6 +53,10 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('model', default_value='',
                               description="artifact tag (default: the yaml's `model`)"),
+        DeclareLaunchArgument(
+            'camera_ip',
+            default_value=os.environ.get('VIBE_CAMERA_ADDRESS', '127.0.0.1'),
+            description='TCP camera source selected by setup.sh/setup_local.sh'),
         DeclareLaunchArgument('viewer', default_value='false',
                               description='launch the OpenCV viewer alongside the node'),
         OpaqueFunction(function=_build),
