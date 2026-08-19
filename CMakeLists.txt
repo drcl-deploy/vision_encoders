@@ -88,7 +88,7 @@ install(
 )
 
 # frame_wire.hpp is header-only and consumed by other packages (cpp_control's
-# sys1 reads the depth plane off the same wire the encoder reads colour from).
+# the repose planner reads the depth plane off the same wire the encoder reads colour from).
 install(DIRECTORY include/ DESTINATION include)
 ament_export_include_directories(include)
 

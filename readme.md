@@ -54,7 +54,7 @@ on `127.0.0.1` — skip the streamer.
 # on the Orin
 python3 scripts/camera_streamer.py                 # loopback only
 python3 scripts/camera_streamer.py --bind 0.0.0.0  # + offboard viewers
-python3 scripts/camera_streamer.py --depth         # + a depth plane (sys1)
+python3 scripts/camera_streamer.py --depth         # + a depth plane (repose planner)
 
 # then, anywhere the workspace is sourced:
 ros2 launch vision_encoders encoder.launch.py                    # yaml's model
@@ -90,7 +90,7 @@ Intrinsics are per-plane, in that plane's own pixels, so consumers need no
 camera config. Depth ships raw `u16` millimetres at 160×120 (38 KB, no encode —
 PNG-16 at full res costs 10–25 ms on the Orin) and `rs.align` runs only on the
 frames that carry one (`--depth-hz`). `encoder_node` takes the colour plane and
-ignores the rest; depth is [cpp_control's sys1](../cpp_control/docs/sys1.md).
+ignores the rest; depth is [cpp_control's repose planner](../cpp_control/docs/planners/repose/planner.md).
 The sim serves the same wire — `camera_depth: 1` in `unitree_mujoco/simulate/config.yaml`.
 
 ### supported backbones:
