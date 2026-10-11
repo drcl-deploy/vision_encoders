@@ -81,14 +81,20 @@ else()
     ${PROJECT_NAME} "rosidl_typesupport_cpp")
 endif()
 
+# Small deployment check: loading the CUDA provider catches missing or ABI-
+# incompatible CUDA/cuDNN libraries without requiring a camera or model.
+add_executable(cuda_provider_check src/cuda_provider_check.cpp)
+target_compile_features(cuda_provider_check PUBLIC cxx_std_17)
+target_link_libraries(cuda_provider_check onnxruntime)
+
 # The node lives in lib/<PROJECT_NAME>/ but ORT + CUDA libs install to lib/.
 # Set RPATH so the dynamic linker finds them relative to the binary.
-set_target_properties(encoder_node PROPERTIES
+set_target_properties(encoder_node cuda_provider_check PROPERTIES
   INSTALL_RPATH "$ORIGIN/../"
   BUILD_WITH_INSTALL_RPATH FALSE
 )
 
-install(TARGETS encoder_node
+install(TARGETS encoder_node cuda_provider_check
   DESTINATION lib/${PROJECT_NAME})
 
 # Install only ONNX Runtime itself and its CUDA provider. CUDA and cuDNN remain
@@ -100,6 +106,14 @@ install(FILES
   "${ONNXRUNTIME_CUDA_PROVIDER}"
   "${ONNXRUNTIME_SHARED_PROVIDER}"
   DESTINATION lib)
+
+# setup_onnxruntime.sh writes an ignored, machine-local hook when CUDA runtime
+# libraries live outside the system loader paths (for example NVIDIA wheels).
+set(VISION_ENCODERS_CUDA_HOOK
+  "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/vision_encoders_cuda_runtime.dsv")
+if(EXISTS "${VISION_ENCODERS_CUDA_HOOK}")
+  ament_environment_hooks("${VISION_ENCODERS_CUDA_HOOK}")
+endif()
 
 # frame_wire.hpp is header-only and consumed by other packages (cpp_control's
 # the repose planner reads the depth plane off the same wire the encoder reads colour from).

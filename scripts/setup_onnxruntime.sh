@@ -6,6 +6,8 @@ readonly REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 readonly DEPS_ROOT="${VISION_ENCODERS_DEPS_DIR:-${REPO_ROOT}/.deps}"
 readonly CACHE_ROOT="${VISION_ENCODERS_CACHE_DIR:-${REPO_ROOT}/.cache}"
 readonly LINK_PATH="${REPO_ROOT}/thirdparty/onnxruntime"
+readonly CUDA_HOOK_PATH="${REPO_ROOT}/thirdparty/vision_encoders_cuda_runtime.dsv"
+readonly MANAGED_CUDA_ROOT="${DEPS_ROOT}/cuda-runtime/cuda12.8-cudnn9"
 
 arch_override=""
 cuda_major_override=""
@@ -14,6 +16,8 @@ archive_sha256=""
 dry_run=0
 force=0
 build_package=0
+install_cuda_runtime=0
+runtime_paths=()
 
 usage() {
   cat <<'EOF'
@@ -25,6 +29,8 @@ Options:
   --archive PATH       Install a local prebuilt archive instead of downloading/building
   --sha256 HEX         Expected checksum for --archive
   --build              Build the vision_encoders ROS package after setup
+  --install-cuda-runtime
+                       Install pinned x86 CUDA 12.8/cuDNN 9 runtime wheels under .deps
   --force              Replace an existing managed installation (keeps a backup)
   --dry-run            Print the selected installation without changing anything
   --arch ARCH          Override architecture for dry-run testing (x86_64 or aarch64)
@@ -34,6 +40,10 @@ Options:
 x86_64 downloads Microsoft's pinned GPU archive. Linux aarch64 GPU archives are
 not published by Microsoft, so Jetson installs build a pinned release from source.
 Use --archive for an internally validated Jetson package when one is available.
+
+The script reuses compatible CUDA libraries from the system, LD_LIBRARY_PATH, or
+Python NVIDIA packages. Use --install-cuda-runtime only when x86 runtime libraries
+are absent; Jetson must use the CUDA/cuDNN libraries supplied by JetPack.
 EOF
 }
 
@@ -71,6 +81,7 @@ while (($# > 0)); do
       shift 2
       ;;
     --build) build_package=1; shift ;;
+    --install-cuda-runtime) install_cuda_runtime=1; shift ;;
     --force) force=1; shift ;;
     --dry-run) dry_run=1; shift ;;
     --arch)
@@ -270,6 +281,177 @@ build_from_source() {
   validate_install "${install_root}" || die "source build completed without an installable SDK"
 }
 
+discover_python_cuda_paths() {
+  require_command python3
+  python3 - "${MANAGED_CUDA_ROOT}" <<'PY'
+import site
+import sys
+from pathlib import Path
+
+roots = [Path(sys.argv[1])]
+roots.extend(Path(path) for path in site.getsitepackages())
+roots.append(Path(site.getusersitepackages()))
+components = (
+    "cublas",
+    "cuda_nvrtc",
+    "cuda_runtime",
+    "cudnn",
+    "cufft",
+    "curand",
+    "nvjitlink",
+)
+seen = set()
+for root in roots:
+    for component in components:
+        library_dir = root / "nvidia" / component / "lib"
+        resolved = str(library_dir.resolve())
+        if library_dir.is_dir() and resolved not in seen:
+            print(resolved)
+            seen.add(resolved)
+PY
+}
+
+append_runtime_path() {
+  local candidate="$1"
+  [[ -d "${candidate}" ]] || return 0
+  local pattern
+  local has_cuda_library=0
+  for pattern in \
+    'libcublas.so*' 'libcudart.so*' 'libcudnn.so*' 'libcufft.so*' \
+    'libcurand.so*' 'libnvrtc.so*' 'libnvJitLink.so*'; do
+    if compgen -G "${candidate}/${pattern}" >/dev/null; then
+      has_cuda_library=1
+      break
+    fi
+  done
+  ((has_cuda_library)) || return 0
+  [[ "${candidate}" != *';'* && "${candidate}" != *$'\n'* ]] ||
+    die "CUDA runtime path contains an unsupported character: ${candidate}"
+  local existing
+  for existing in "${runtime_paths[@]}"; do
+    [[ "${existing}" == "${candidate}" ]] && return
+  done
+  runtime_paths+=("${candidate}")
+}
+
+collect_runtime_paths() {
+  runtime_paths=()
+  local path
+  local configured_paths="${VISION_ENCODERS_CUDA_LIBRARY_PATH:-${LD_LIBRARY_PATH:-}}"
+  if [[ -n "${configured_paths}" ]]; then
+    local -a split_paths=()
+    IFS=':' read -r -a split_paths <<< "${configured_paths}"
+    for path in "${split_paths[@]}"; do
+      append_runtime_path "${path}"
+    done
+  fi
+  while IFS= read -r path; do
+    append_runtime_path "${path}"
+  done < <(discover_python_cuda_paths)
+}
+
+join_runtime_paths() {
+  local joined=""
+  local path
+  for path in "${runtime_paths[@]}"; do
+    if [[ -z "${joined}" ]]; then
+      joined="${path}"
+    else
+      joined="${joined}:${path}"
+    fi
+  done
+  printf '%s' "${joined}"
+}
+
+provider_link_report() {
+  local library_path="$1"
+  local provider="${install_root}/lib/libonnxruntime_providers_cuda.so"
+  if [[ -n "${library_path}" ]]; then
+    env -u LD_LIBRARY_PATH LD_LIBRARY_PATH="${library_path}" ldd "${provider}" 2>&1
+  else
+    env -u LD_LIBRARY_PATH ldd "${provider}" 2>&1
+  fi
+}
+
+missing_provider_dependencies() {
+  provider_link_report "$1" | awk '/not found/ {print $1}' | paste -sd, -
+}
+
+install_managed_cuda_runtime() {
+  [[ "${selected_arch}" == "x86_64" && "${ort_version}" == "1.22.0" ]] ||
+    die "--install-cuda-runtime supports only the x86_64 ORT 1.22 build"
+  require_command python3
+  python3 -m pip --version >/dev/null 2>&1 || die "python3 pip is required"
+  mkdir -p "${MANAGED_CUDA_ROOT}"
+  note "installing pinned CUDA 12.8/cuDNN 9 runtime under ${MANAGED_CUDA_ROOT}"
+  python3 -m pip install --upgrade --target "${MANAGED_CUDA_ROOT}" \
+    nvidia-cuda-runtime-cu12==12.8.90 \
+    nvidia-cublas-cu12==12.8.4.1 \
+    nvidia-cufft-cu12==11.3.3.83 \
+    nvidia-curand-cu12==10.3.9.90 \
+    nvidia-cudnn-cu12==9.10.2.21 \
+    nvidia-cuda-nvrtc-cu12==12.8.93 \
+    nvidia-nvjitlink-cu12==12.8.93
+}
+
+write_cuda_environment_hook() {
+  mkdir -p "$(dirname -- "${CUDA_HOOK_PATH}")"
+  : > "${CUDA_HOOK_PATH}"
+  local path
+  for path in "${runtime_paths[@]}"; do
+    printf 'prepend-non-duplicate;LD_LIBRARY_PATH;%s\n' "${path}" >> "${CUDA_HOOK_PATH}"
+  done
+}
+
+configure_cuda_runtime() {
+  require_command ldd
+  # Never leave a previously discovered machine-local runtime active after a
+  # failed reconfiguration.
+  runtime_paths=()
+  write_cuda_environment_hook
+
+  local missing
+  missing="$(missing_provider_dependencies "")"
+  if [[ -z "${missing}" ]]; then
+    note "CUDA provider dependencies: system runtime"
+    return
+  fi
+
+  collect_runtime_paths
+  local library_path
+  library_path="$(join_runtime_paths)"
+  missing="$(missing_provider_dependencies "${library_path}")"
+
+  if [[ -n "${missing}" && ${install_cuda_runtime} -eq 1 ]]; then
+    install_managed_cuda_runtime
+    collect_runtime_paths
+    library_path="$(join_runtime_paths)"
+    missing="$(missing_provider_dependencies "${library_path}")"
+  fi
+
+  if [[ -n "${missing}" ]]; then
+    if [[ "${selected_arch}" == "x86_64" && "${ort_version}" == "1.22.0" ]]; then
+      die "CUDA provider dependencies not found: ${missing}. Rerun with --install-cuda-runtime, or set VISION_ENCODERS_CUDA_LIBRARY_PATH."
+    fi
+    die "CUDA provider dependencies not found: ${missing}. Install the matching JetPack CUDA/cuDNN runtime."
+  fi
+
+  write_cuda_environment_hook
+  note "CUDA provider dependencies: ${library_path}"
+}
+
+run_cuda_provider_check() {
+  local executable="$1"
+  [[ -x "${executable}" ]] || die "CUDA provider check was not installed: ${executable}"
+  local library_path
+  library_path="$(join_runtime_paths)"
+  if [[ -n "${library_path}" ]]; then
+    env -u LD_LIBRARY_PATH LD_LIBRARY_PATH="${library_path}" "${executable}"
+  else
+    env -u LD_LIBRARY_PATH "${executable}"
+  fi
+}
+
 reuse_install=0
 if prepare_install_root; then
   reuse_install=0
@@ -302,16 +484,10 @@ if [[ -e "${LINK_PATH}" && ! -L "${LINK_PATH}" ]]; then
 fi
 ln -sfn "../.deps/onnxruntime/${package_name}" "${LINK_PATH}"
 
-missing_dependencies="$(
-  ldd "${install_root}/lib/libonnxruntime_providers_cuda.so" 2>/dev/null |
-    awk '/not found/ {print $1}' | paste -sd, -
-)"
-if [[ -n "${missing_dependencies}" ]]; then
-  echo "warning: CUDA provider dependencies not found: ${missing_dependencies}" >&2
-  echo "         install a matching CUDA/cuDNN runtime before running the encoder" >&2
-fi
+configure_cuda_runtime
 
 note "ready: ${LINK_PATH} -> $(readlink "${LINK_PATH}")"
+note "ROS CUDA environment hook: ${CUDA_HOOK_PATH}"
 
 if ((build_package)); then
   require_command colcon
@@ -327,6 +503,8 @@ if ((build_package)); then
     (cd "${workspace_root}" && colcon build --symlink-install \
       --packages-select vision_encoders \
       --cmake-args "-DONNXRUNTIME_ROOT=${install_root}")
+    run_cuda_provider_check \
+      "${workspace_root}/install/vision_encoders/lib/vision_encoders/cuda_provider_check"
   else
     colcon --log-base "${REPO_ROOT}/.colcon/log" build \
       --base-paths "${REPO_ROOT}" \
@@ -335,6 +513,8 @@ if ((build_package)); then
       --symlink-install \
       --packages-select vision_encoders \
       --cmake-args "-DONNXRUNTIME_ROOT=${install_root}"
+    run_cuda_provider_check \
+      "${REPO_ROOT}/.colcon/install/vision_encoders/lib/vision_encoders/cuda_provider_check"
     note "source ${REPO_ROOT}/.colcon/install/setup.bash"
   fi
 fi

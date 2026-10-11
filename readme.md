@@ -41,12 +41,27 @@ the ignored `.deps/` directory, and maintains the stable
 - A validated prebuilt Jetson archive can be installed with
   `--archive <path> --sha256 <digest>`.
 
-The host or JetPack installation must supply compatible CUDA and cuDNN runtime
-libraries. The setup script reports missing libraries before the build. Use
-`--dry-run` to inspect its selection and `--help` for all options.
+The script verifies the CUDA provider's shared-library dependencies and fails
+before the build if they cannot be resolved. It reuses libraries from the
+system, `LD_LIBRARY_PATH`, or installed NVIDIA Python packages. When it finds a
+non-system runtime, it installs a ROS environment hook so the C++ node keeps
+working after `source install/setup.bash`.
 
-JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
-`python3 -c "import onnx; p='models/<tag>.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"`
+On an x86 workstation with no compatible runtime, install a pinned CUDA
+12.8/cuDNN 9 runtime locally (no `sudo`) with:
+
+```bash
+./scripts/setup_onnxruntime.sh --install-cuda-runtime --build
+```
+
+The download is intentionally opt-in because the NVIDIA runtime is large.
+Jetson always uses the CUDA/cuDNN stack supplied by JetPack. The `--build` path
+also loads the CUDA provider with `cuda_provider_check`; it does not silently
+fall back to CPU. Use `--dry-run` to inspect the ORT selection and `--help` for
+all options.
+
+JetPack 5 note: ORT 1.15 accepts ONNX IR through v9. The released encoder
+artifacts use IR v8/opset 18 and do not require conversion.
 
 ### build
 
@@ -54,6 +69,7 @@ JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
 colcon build --symlink-install --packages-select vision_encoders \
   --cmake-args -DONNXRUNTIME_ROOT=/path/to/onnxruntime  # optional override
 source install/setup.bash
+ros2 run vision_encoders cuda_provider_check
 ```
 
 ## run
