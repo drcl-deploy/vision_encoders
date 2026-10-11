@@ -13,7 +13,7 @@
  *
  * The payload is either legacy JPEG/PNG bytes or a multi-plane record carrying
  * colour + depth (frame_wire.hpp). This node only ever wants the colour plane;
- * depth is sys1's business. One parser, both consumers.
+ * depth is the repose planner's business. One parser, both consumers.
  */
 
 #include <rclcpp/rclcpp.hpp>

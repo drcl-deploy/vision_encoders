@@ -7,7 +7,7 @@ the payload is the self-describing multi-plane record parsed by
 `include/vision_encoders/frame_wire.hpp` (colour + depth in ONE record, so a
 consumer never has to pair two streams by timestamp).
 
-Depth ships RAW uint16 millimetres, already downscaled: sys1 classifies at
+Depth ships RAW uint16 millimetres, already downscaled: the repose planner classifies at
 160 px and NEAREST-resizes depth to match, so 160x120 raw is 38 KB and 0 ms of
 encode — smaller than the JPEG. PNG-16 at full res costs 10-25 ms on the Orin
 and would blow the 60 Hz loop. `rs.align(color)` runs ONLY on the frames that
@@ -31,7 +31,7 @@ Workflow (Orin):
     python3 camera_streamer.py                            # JPEG, loopback only
     python3 camera_streamer.py --bind 0.0.0.0             # accept offboard too
     python3 camera_streamer.py --codec png -v             # PNG + per-sec fps log
-    python3 camera_streamer.py --depth                    # + depth for sys1
+    python3 camera_streamer.py --depth                    # + depth for the repose planner
 
 Why bypass DDS at all:
     Unitree's videohub_pc4 publishes via CycloneDDS 0.7; the desktop's
@@ -157,9 +157,9 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="log per-second fps, payload size, client counts")
     ap.add_argument("--depth", action="store_true",
-                    help="attach a depth plane (multi-plane wire) — needed by sys1")
+                    help="attach a depth plane (multi-plane wire) — needed by the repose planner")
     ap.add_argument("--depth-size", default="160x120",
-                    help="depth plane WxH; sys1 classifies at 160 px (default: 160x120)")
+                    help="depth plane WxH; the repose planner classifies at 160 px (default: 160x120)")
     ap.add_argument("--depth-hz", type=float, default=10.0,
                     help="depth plane rate; align() runs only on these frames (default: 10)")
     args = ap.parse_args()

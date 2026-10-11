@@ -23,16 +23,27 @@ x86, run on the Orin.
 
 ### thirdparty
 
-Same pattern as [cpp_control](../cpp_control/readme.md#install) — symlink a
-pre-built `onnxruntime-linux-<arch>-gpu-<version>` into [thirdparty](./thirdparty/)
-and CMake picks the newest. CUDA is required; no CPU fallback.
+CUDA is required; there is no CPU fallback. Set up the pinned ONNX Runtime and
+build the ROS package with one command:
 
-- **x86_64**: [pre-built release](https://github.com/microsoft/onnxruntime/releases), extract + symlink.
-- **aarch64 (Orin)**: build from source (ORT 1.15.x for JetPack 5 / CUDA 11.4,
-  1.22+ for JetPack 6 / CUDA 12.x) — recipe in git history or ORT docs.
-- CUDA/cuDNN runtime `.so`s can be plucked from the NVIDIA pip wheels into the
-  ORT `lib/` dir (`nvidia-cudnn-cu12`, `nvidia-cublas-cu12`, …) + one
-  `patchelf --set-rpath '$ORIGIN' libonnxruntime_providers_cuda.so`.
+```bash
+./scripts/setup_onnxruntime.sh --build
+```
+
+The script detects `x86_64` versus `aarch64`, verifies downloads, installs under
+the ignored `.deps/` directory, and maintains the stable
+`thirdparty/onnxruntime` link consumed by CMake. It is safe to run repeatedly.
+
+- **x86_64** downloads the checksum-pinned Microsoft ONNX Runtime 1.22 GPU SDK.
+- **aarch64 / Orin** detects the CUDA generation and builds the pinned ONNX
+  Runtime release from source because Microsoft does not publish an aarch64
+  CUDA C++ archive. CUDA 11 selects ORT 1.15.1; CUDA 12 selects ORT 1.22.0.
+- A validated prebuilt Jetson archive can be installed with
+  `--archive <path> --sha256 <digest>`.
+
+The host or JetPack installation must supply compatible CUDA and cuDNN runtime
+libraries. The setup script reports missing libraries before the build. Use
+`--dry-run` to inspect its selection and `--help` for all options.
 
 JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
 `python3 -c "import onnx; p='models/<tag>.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"`
@@ -40,7 +51,8 @@ JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
 ### build
 
 ```bash
-colcon build --symlink-install --packages-select vision_encoders
+colcon build --symlink-install --packages-select vision_encoders \
+  --cmake-args -DONNXRUNTIME_ROOT=/path/to/onnxruntime  # optional override
 source install/setup.bash
 ```
 
@@ -54,7 +66,7 @@ on `127.0.0.1` — skip the streamer.
 # on the Orin
 python3 scripts/camera_streamer.py                 # loopback only
 python3 scripts/camera_streamer.py --bind 0.0.0.0  # + offboard viewers
-python3 scripts/camera_streamer.py --depth         # + a depth plane (sys1)
+python3 scripts/camera_streamer.py --depth         # + a depth plane (repose planner)
 
 # then, anywhere the workspace is sourced:
 ros2 launch vision_encoders encoder.launch.py                    # yaml's model
@@ -90,7 +102,7 @@ Intrinsics are per-plane, in that plane's own pixels, so consumers need no
 camera config. Depth ships raw `u16` millimetres at 160×120 (38 KB, no encode —
 PNG-16 at full res costs 10–25 ms on the Orin) and `rs.align` runs only on the
 frames that carry one (`--depth-hz`). `encoder_node` takes the colour plane and
-ignores the rest; depth is [cpp_control's sys1](../cpp_control/docs/sys1.md).
+ignores the rest; depth is [cpp_control's repose planner](../cpp_control/docs/planners/repose/planner.md).
 The sim serves the same wire — `camera_depth: 1` in `unitree_mujoco/simulate/config.yaml`.
 
 ### supported backbones:
@@ -137,6 +149,6 @@ vision_encoders/
 │   └── wire.py                  # the one python TCP wire impl
 ├── tests/fps.py                 # zoo bench
 ├── docs/method.md               # design + rationale
-├── thirdparty/onnxruntime-...   # (symlink)
+├── thirdparty/onnxruntime       # stable link managed by setup_onnxruntime.sh
 └── models/<tag>.{onnx,manifest.json}   # export-encoder output (untracked)
 ```

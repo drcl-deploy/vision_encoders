@@ -21,36 +21,47 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES std_msgs
 )
 
-# ONNX Runtime GPU — symlink pre-built (or source-built) release into thirdparty/
-# Auto-detects architecture and version. See readme.md.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-    set(_ort_arch "x64")
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(_ort_arch "aarch64")
+# ONNX Runtime is provisioned explicitly by scripts/setup_onnxruntime.sh. An
+# explicit CMake value wins, followed by the environment, then the stable link
+# managed by that script. Do not scan versioned directories: it makes clean
+# builds depend on whatever stale archive happens to sort last.
+set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime SDK root")
+if(NOT ONNXRUNTIME_ROOT AND DEFINED ENV{ONNXRUNTIME_ROOT})
+  set(ONNXRUNTIME_ROOT "$ENV{ONNXRUNTIME_ROOT}")
 endif()
-file(GLOB _ort_candidates "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime-linux-${_ort_arch}-gpu-*")
-list(SORT _ort_candidates ORDER DESCENDING)
-list(LENGTH _ort_candidates _ort_count)
-if(_ort_count GREATER 0)
-    list(GET _ort_candidates 0 ONNXRUNTIME_ROOT)
-else()
-    set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/NOTFOUND")
+if(NOT ONNXRUNTIME_ROOT)
+  set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/onnxruntime")
 endif()
+get_filename_component(ONNXRUNTIME_ROOT "${ONNXRUNTIME_ROOT}" REALPATH)
 
-if(NOT EXISTS "${ONNXRUNTIME_ROOT}/include")
+find_path(ONNXRUNTIME_INCLUDE_DIR
+  NAMES onnxruntime_cxx_api.h
+  PATHS "${ONNXRUNTIME_ROOT}/include"
+  NO_DEFAULT_PATH)
+find_library(ONNXRUNTIME_LIBRARY
+  NAMES onnxruntime
+  PATHS "${ONNXRUNTIME_ROOT}/lib"
+  NO_DEFAULT_PATH)
+set(ONNXRUNTIME_CUDA_PROVIDER
+  "${ONNXRUNTIME_ROOT}/lib/libonnxruntime_providers_cuda.so")
+set(ONNXRUNTIME_SHARED_PROVIDER
+  "${ONNXRUNTIME_ROOT}/lib/libonnxruntime_providers_shared.so")
+
+if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY OR
+  NOT EXISTS "${ONNXRUNTIME_CUDA_PROVIDER}" OR
+  NOT EXISTS "${ONNXRUNTIME_SHARED_PROVIDER}")
   message(FATAL_ERROR
-    "ONNX Runtime GPU not found in ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/\n"
-    "Expected: onnxruntime-linux-${_ort_arch}-gpu-<version>\n"
-    "Download or build onnxruntime with CUDA, then symlink into thirdparty/:\n"
-    "  ln -s /PATH/TO/onnxruntime-linux-${_ort_arch}-gpu-<version> "
-    "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/")
+    "A CUDA-enabled ONNX Runtime SDK was not found at:\n"
+    "  ${ONNXRUNTIME_ROOT}\n"
+    "Run scripts/setup_onnxruntime.sh, or configure with:\n"
+    "  -DONNXRUNTIME_ROOT=/path/to/onnxruntime")
 endif()
-message(STATUS "Found ONNX Runtime GPU at ${ONNXRUNTIME_ROOT}")
+message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
 
-add_library(onnxruntime SHARED IMPORTED)
+add_library(onnxruntime SHARED IMPORTED GLOBAL)
 set_target_properties(onnxruntime PROPERTIES
-  IMPORTED_LOCATION "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so"
-  INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_ROOT}/include"
+  IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
+  INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
 )
 
 # The generic encoder node — one binary, model knowledge lives in the artifact.
@@ -80,15 +91,18 @@ set_target_properties(encoder_node PROPERTIES
 install(TARGETS encoder_node
   DESTINATION lib/${PROJECT_NAME})
 
-# Install ONNX Runtime shared libs alongside the node
-install(
-  DIRECTORY "${ONNXRUNTIME_ROOT}/lib/"
-  DESTINATION lib
-  FILES_MATCHING PATTERN "*.so*"
-)
+# Install only ONNX Runtime itself and its CUDA provider. CUDA and cuDNN remain
+# platform dependencies supplied by the workstation or JetPack.
+file(GLOB ONNXRUNTIME_CORE_LIBRARIES
+  "${ONNXRUNTIME_ROOT}/lib/libonnxruntime.so*")
+install(FILES
+  ${ONNXRUNTIME_CORE_LIBRARIES}
+  "${ONNXRUNTIME_CUDA_PROVIDER}"
+  "${ONNXRUNTIME_SHARED_PROVIDER}"
+  DESTINATION lib)
 
 # frame_wire.hpp is header-only and consumed by other packages (cpp_control's
-# sys1 reads the depth plane off the same wire the encoder reads colour from).
+# the repose planner reads the depth plane off the same wire the encoder reads colour from).
 install(DIRECTORY include/ DESTINATION include)
 ament_export_include_directories(include)
 
@@ -96,7 +110,11 @@ install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY scripts/ DESTINATION share/${PROJECT_NAME}/scripts
         USE_SOURCE_PERMISSIONS)
-install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/models")
+  install(DIRECTORY models/ DESTINATION share/${PROJECT_NAME}/models)
+else()
+  message(STATUS "No local encoder artifacts found; skipping models install")
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

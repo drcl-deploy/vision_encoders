@@ -1,5 +1,8 @@
 # Pre-built libraries
 thirdparty/
+.deps/
+.cache/
+.colcon/
 
 # Exported models
 *.onnx
