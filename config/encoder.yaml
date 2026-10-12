@@ -4,10 +4,10 @@ encoder_node:
     # (launch arg model:= overrides; model_path/manifest_path for absolute paths)
     model: theia-tiny
 
-    # raw frame size on the wire (mirrors the hardware camera; sim sends the same).
-    # model input size comes from the MANIFEST — never configured here.
-    raw_frame_width: 640
-    raw_frame_height: 480
+    # Zero preserves the incoming pixels; resize only once to the manifest size.
+    # Set both positive only to reproduce a legacy intermediate resize.
+    raw_frame_width: 0
+    raw_frame_height: 0
 
     # TCP camera source — wire format of scripts/camera_streamer.py and the
     # sim's head-camera TCP server in unitree_sdk2_bridge.h.

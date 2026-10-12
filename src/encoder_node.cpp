@@ -95,8 +95,8 @@ public:
     this->declare_parameter<std::string>("manifest_path", "");
     this->declare_parameter<std::string>("camera_ip", "127.0.0.1");
     this->declare_parameter<int>("camera_port", 5555);
-    this->declare_parameter<int>("raw_frame_width", 640);
-    this->declare_parameter<int>("raw_frame_height", 480);
+    this->declare_parameter<int>("raw_frame_width", 0);
+    this->declare_parameter<int>("raw_frame_height", 0);
     this->declare_parameter<double>("inference_rate_hz", 50.0);
     this->declare_parameter<std::string>("tokens_topic", "/enc/tokens");
     this->declare_parameter<bool>("publish_frame", true);
@@ -120,6 +120,10 @@ public:
     camera_port_ = static_cast<uint16_t>(this->get_parameter("camera_port").as_int());
     raw_frame_width_ = this->get_parameter("raw_frame_width").as_int();
     raw_frame_height_ = this->get_parameter("raw_frame_height").as_int();
+    if (raw_frame_width_ < 0 || raw_frame_height_ < 0 ||
+        ((raw_frame_width_ == 0) != (raw_frame_height_ == 0))) {
+      throw std::runtime_error("raw_frame dimensions must both be zero (native) or positive");
+    }
     const double rate_hz = this->get_parameter("inference_rate_hz").as_double();
     publish_frame_ = this->get_parameter("publish_frame").as_bool();
 
@@ -135,8 +139,22 @@ public:
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#if ORT_API_VERSION >= 18
+    // The export gate uses fp32. TF32 rounds inputs and can exceed that gate.
+    const auto & api = Ort::GetApi();
+    OrtCUDAProviderOptionsV2 * raw_cuda = nullptr;
+    Ort::ThrowOnError(api.CreateCUDAProviderOptions(&raw_cuda));
+    std::unique_ptr<OrtCUDAProviderOptionsV2, decltype(api.ReleaseCUDAProviderOptions)>
+      cuda_opts(raw_cuda, api.ReleaseCUDAProviderOptions);
+    const char * keys[] = {"use_tf32"};
+    const char * values[] = {"0"};
+    Ort::ThrowOnError(api.UpdateCUDAProviderOptions(cuda_opts.get(), keys, values, 1));
+    opts.AppendExecutionProvider_CUDA_V2(*cuda_opts);
+#else
+    // Older JetPack ORT has no TF32 option; validate numerics on that target.
     OrtCUDAProviderOptions cuda_opts{};
     opts.AppendExecutionProvider_CUDA(cuda_opts);
+#endif
     session_ = std::make_unique<Ort::Session>(*env_, model_path.c_str(), opts);
 
     validate_graph();
@@ -273,8 +291,9 @@ private:
                               const_cast<uint8_t *>(colour->data));
         cv::Mat img = cv::imdecode(encoded, cv::IMREAD_COLOR);  // BGR
         if (img.empty()) continue;
-        // Stage-1 resize: wire -> raw_frame_* (hardware-mirror sanity step).
-        if (img.cols != raw_frame_width_ || img.rows != raw_frame_height_) {
+        // Preserve native pixels unless a legacy intermediate size was requested.
+        if (raw_frame_width_ > 0 &&
+            (img.cols != raw_frame_width_ || img.rows != raw_frame_height_)) {
           cv::resize(img, img, cv::Size(raw_frame_width_, raw_frame_height_));
         }
         const double decode_ms = std::chrono::duration<double, std::milli>(
@@ -307,7 +326,7 @@ private:
 
     const auto t0 = std::chrono::steady_clock::now();
 
-    // Stage-2 resize: raw_frame_* -> manifest input. All remaining preprocessing
+    // Resize once to the manifest input, only if needed. All remaining preprocessing
     // (cast, /255, BGR->RGB, layout, norm) lives inside the graph.
     if (frame.cols != manifest_.width || frame.rows != manifest_.height) {
       cv::resize(frame, frame, cv::Size(manifest_.width, manifest_.height));
@@ -360,7 +379,7 @@ private:
 
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
-  int raw_frame_width_ = 640, raw_frame_height_ = 480;
+  int raw_frame_width_ = 0, raw_frame_height_ = 0;
   bool publish_frame_ = true;
 
   std::thread tcp_thread_;
