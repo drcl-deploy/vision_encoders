@@ -19,15 +19,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_encoders/msg/image_tokens.hpp>
+#include <vision_encoders/camera_tcp.hpp>
 #include <vision_encoders/frame_wire.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <array>
 #include <atomic>
@@ -243,43 +240,22 @@ private:
     }
   }
 
-  static bool recv_exact(int fd, uint8_t * buf, size_t n)
-  {
-    size_t got = 0;
-    while (got < n) {
-      ssize_t r = ::recv(fd, buf + got, n - got, 0);
-      if (r <= 0) return false;
-      got += static_cast<size_t>(r);
-    }
-    return true;
-  }
-
   void tcp_loop()
   {
+    std::vector<uint8_t> payload;
     while (running_.load()) {
-      int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+      const int fd = vision_encoders::camera_tcp::connect(camera_ip_, camera_port_, running_);
       if (fd < 0) {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        continue;
-      }
-      sockaddr_in addr{};
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(camera_port_);
-      inet_pton(AF_INET, camera_ip_.c_str(), &addr.sin_addr);
-      if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        if (!running_.load()) break;
         RCLCPP_WARN(this->get_logger(), "Cannot connect to %s:%u, retrying...",
                     camera_ip_.c_str(), camera_port_);
-        ::close(fd);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        vision_encoders::camera_tcp::retry_delay(running_);
         continue;
       }
       RCLCPP_INFO(this->get_logger(), "Connected to %s:%u", camera_ip_.c_str(), camera_port_);
 
       while (running_.load()) {
-        uint32_t length = 0;
-        if (!recv_exact(fd, reinterpret_cast<uint8_t *>(&length), 4)) break;
-        std::vector<uint8_t> payload(length);
-        if (!recv_exact(fd, payload.data(), length)) break;
+        if (!vision_encoders::camera_tcp::read_frame(fd, payload, running_)) break;
 
         const auto stamp = this->now();
         const auto t0 = std::chrono::steady_clock::now();
@@ -306,7 +282,8 @@ private:
         has_new_frame_ = true;
       }
       ::close(fd);
-      RCLCPP_WARN(this->get_logger(), "Disconnected, reconnecting...");
+      if (running_.load())
+        RCLCPP_WARN(this->get_logger(), "Camera disconnected or frame timed out; reconnecting...");
     }
   }
 

@@ -118,8 +118,15 @@ Intrinsics are per-plane, in that plane's own pixels, so consumers need no
 camera config. Depth ships raw `u16` millimetres at 160×120 (38 KB, no encode —
 PNG-16 at full res costs 10–25 ms on the Orin) and `rs.align` runs only on the
 frames that carry one (`--depth-hz`). `encoder_node` takes the colour plane and
-ignores the rest; depth is [cpp_control's repose planner](../cpp_control/docs/planners/repose/planner.md).
+ignores the rest; depth is used by the
+[sledgehammer planner](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/planner.md).
 The sim serves the same wire — `camera_depth: 1` in `unitree_mujoco/simulate/config.yaml`.
+
+Encoder and planner camera consumers share `camera_tcp.hpp`: connection and
+complete-frame reads have a two-second deadline, including partial frames.
+EOF or timeout reconnects on a new socket. Shutdown also interrupts connection,
+read and retry waits (checked every 100 ms), so a silent camera cannot hold
+Ctrl-C indefinitely. Image decoding and inference are unchanged.
 
 ### supported backbones:
 
