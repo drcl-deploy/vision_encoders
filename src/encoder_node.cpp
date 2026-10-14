@@ -19,15 +19,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_encoders/msg/image_tokens.hpp>
+#include <vision_encoders/camera_tcp.hpp>
 #include <vision_encoders/frame_wire.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <opencv2/opencv.hpp>
 #include <yaml-cpp/yaml.h>
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <array>
 #include <atomic>
@@ -95,8 +92,8 @@ public:
     this->declare_parameter<std::string>("manifest_path", "");
     this->declare_parameter<std::string>("camera_ip", "127.0.0.1");
     this->declare_parameter<int>("camera_port", 5555);
-    this->declare_parameter<int>("raw_frame_width", 640);
-    this->declare_parameter<int>("raw_frame_height", 480);
+    this->declare_parameter<int>("raw_frame_width", 0);
+    this->declare_parameter<int>("raw_frame_height", 0);
     this->declare_parameter<double>("inference_rate_hz", 50.0);
     this->declare_parameter<std::string>("tokens_topic", "/enc/tokens");
     this->declare_parameter<bool>("publish_frame", true);
@@ -120,6 +117,10 @@ public:
     camera_port_ = static_cast<uint16_t>(this->get_parameter("camera_port").as_int());
     raw_frame_width_ = this->get_parameter("raw_frame_width").as_int();
     raw_frame_height_ = this->get_parameter("raw_frame_height").as_int();
+    if (raw_frame_width_ < 0 || raw_frame_height_ < 0 ||
+        ((raw_frame_width_ == 0) != (raw_frame_height_ == 0))) {
+      throw std::runtime_error("raw_frame dimensions must both be zero (native) or positive");
+    }
     const double rate_hz = this->get_parameter("inference_rate_hz").as_double();
     publish_frame_ = this->get_parameter("publish_frame").as_bool();
 
@@ -135,8 +136,22 @@ public:
     Ort::SessionOptions opts;
     opts.SetIntraOpNumThreads(1);
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+#if ORT_API_VERSION >= 18
+    // The export gate uses fp32. TF32 rounds inputs and can exceed that gate.
+    const auto & api = Ort::GetApi();
+    OrtCUDAProviderOptionsV2 * raw_cuda = nullptr;
+    Ort::ThrowOnError(api.CreateCUDAProviderOptions(&raw_cuda));
+    std::unique_ptr<OrtCUDAProviderOptionsV2, decltype(api.ReleaseCUDAProviderOptions)>
+      cuda_opts(raw_cuda, api.ReleaseCUDAProviderOptions);
+    const char * keys[] = {"use_tf32"};
+    const char * values[] = {"0"};
+    Ort::ThrowOnError(api.UpdateCUDAProviderOptions(cuda_opts.get(), keys, values, 1));
+    opts.AppendExecutionProvider_CUDA_V2(*cuda_opts);
+#else
+    // Older JetPack ORT has no TF32 option; validate numerics on that target.
     OrtCUDAProviderOptions cuda_opts{};
     opts.AppendExecutionProvider_CUDA(cuda_opts);
+#endif
     session_ = std::make_unique<Ort::Session>(*env_, model_path.c_str(), opts);
 
     validate_graph();
@@ -225,43 +240,22 @@ private:
     }
   }
 
-  static bool recv_exact(int fd, uint8_t * buf, size_t n)
-  {
-    size_t got = 0;
-    while (got < n) {
-      ssize_t r = ::recv(fd, buf + got, n - got, 0);
-      if (r <= 0) return false;
-      got += static_cast<size_t>(r);
-    }
-    return true;
-  }
-
   void tcp_loop()
   {
+    std::vector<uint8_t> payload;
     while (running_.load()) {
-      int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+      const int fd = vision_encoders::camera_tcp::connect(camera_ip_, camera_port_, running_);
       if (fd < 0) {
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-        continue;
-      }
-      sockaddr_in addr{};
-      addr.sin_family = AF_INET;
-      addr.sin_port = htons(camera_port_);
-      inet_pton(AF_INET, camera_ip_.c_str(), &addr.sin_addr);
-      if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        if (!running_.load()) break;
         RCLCPP_WARN(this->get_logger(), "Cannot connect to %s:%u, retrying...",
                     camera_ip_.c_str(), camera_port_);
-        ::close(fd);
-        std::this_thread::sleep_for(std::chrono::seconds(2));
+        vision_encoders::camera_tcp::retry_delay(running_);
         continue;
       }
       RCLCPP_INFO(this->get_logger(), "Connected to %s:%u", camera_ip_.c_str(), camera_port_);
 
       while (running_.load()) {
-        uint32_t length = 0;
-        if (!recv_exact(fd, reinterpret_cast<uint8_t *>(&length), 4)) break;
-        std::vector<uint8_t> payload(length);
-        if (!recv_exact(fd, payload.data(), length)) break;
+        if (!vision_encoders::camera_tcp::read_frame(fd, payload, running_)) break;
 
         const auto stamp = this->now();
         const auto t0 = std::chrono::steady_clock::now();
@@ -273,8 +267,9 @@ private:
                               const_cast<uint8_t *>(colour->data));
         cv::Mat img = cv::imdecode(encoded, cv::IMREAD_COLOR);  // BGR
         if (img.empty()) continue;
-        // Stage-1 resize: wire -> raw_frame_* (hardware-mirror sanity step).
-        if (img.cols != raw_frame_width_ || img.rows != raw_frame_height_) {
+        // Preserve native pixels unless a legacy intermediate size was requested.
+        if (raw_frame_width_ > 0 &&
+            (img.cols != raw_frame_width_ || img.rows != raw_frame_height_)) {
           cv::resize(img, img, cv::Size(raw_frame_width_, raw_frame_height_));
         }
         const double decode_ms = std::chrono::duration<double, std::milli>(
@@ -287,7 +282,8 @@ private:
         has_new_frame_ = true;
       }
       ::close(fd);
-      RCLCPP_WARN(this->get_logger(), "Disconnected, reconnecting...");
+      if (running_.load())
+        RCLCPP_WARN(this->get_logger(), "Camera disconnected or frame timed out; reconnecting...");
     }
   }
 
@@ -307,7 +303,7 @@ private:
 
     const auto t0 = std::chrono::steady_clock::now();
 
-    // Stage-2 resize: raw_frame_* -> manifest input. All remaining preprocessing
+    // Resize once to the manifest input, only if needed. All remaining preprocessing
     // (cast, /255, BGR->RGB, layout, norm) lives inside the graph.
     if (frame.cols != manifest_.width || frame.rows != manifest_.height) {
       cv::resize(frame, frame, cv::Size(manifest_.width, manifest_.height));
@@ -360,7 +356,7 @@ private:
 
   std::string camera_ip_;
   uint16_t camera_port_ = 5555;
-  int raw_frame_width_ = 640, raw_frame_height_ = 480;
+  int raw_frame_width_ = 0, raw_frame_height_ = 0;
   bool publish_frame_ = true;
 
   std::thread tcp_thread_;

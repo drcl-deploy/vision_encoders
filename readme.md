@@ -37,16 +37,44 @@ the ignored `.deps/` directory, and maintains the stable
 - **x86_64** downloads the checksum-pinned Microsoft ONNX Runtime 1.22 GPU SDK.
 - **aarch64 / Orin** detects the CUDA generation and builds the pinned ONNX
   Runtime release from source because Microsoft does not publish an aarch64
-  CUDA C++ archive. CUDA 11 selects ORT 1.15.1; CUDA 12 selects ORT 1.22.0.
+  CUDA C++ archive. CUDA 11/cuDNN 8 selects ORT 1.15.1, CUDA 12/cuDNN 8 selects
+  ORT 1.18.0, and CUDA 12/cuDNN 9 selects ORT 1.22.0. Other pairs fail early.
 - A validated prebuilt Jetson archive can be installed with
   `--archive <path> --sha256 <digest>`.
 
-The host or JetPack installation must supply compatible CUDA and cuDNN runtime
-libraries. The setup script reports missing libraries before the build. Use
-`--dry-run` to inspect its selection and `--help` for all options.
+The script verifies the CUDA provider's shared-library dependencies and fails
+before the build if they cannot be resolved. It reuses libraries from the
+system, `LD_LIBRARY_PATH`, or installed NVIDIA Python packages. When it finds a
+non-system runtime, it installs a ROS environment hook so the C++ node keeps
+working after `source install/setup.bash`.
 
-JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
-`python3 -c "import onnx; p='models/<tag>.onnx'; m=onnx.load(p); m.ir_version=9; onnx.save(m,p)"`
+On an x86 workstation with no compatible runtime, install a pinned CUDA
+12.8/cuDNN 9 runtime locally (no `sudo`) with:
+
+```bash
+./scripts/setup_onnxruntime.sh --install-cuda-runtime --build
+```
+
+The download is intentionally opt-in because the NVIDIA runtime is large.
+Jetson always uses the CUDA/cuDNN stack supplied by JetPack. The `--build` path
+also loads the CUDA provider with `cuda_provider_check`; it does not silently
+fall back to CPU. Use `--dry-run` to inspect the ORT selection and `--help` for
+all options.
+
+Source builds provision CMake 3.28.4 in a local tool venv and normalize installed
+headers to the binary SDK layout. `--jobs 2` (the default) bounds compilation.
+JetPack development headers and `nvcc` are required; ORT 1.22 needs GCC 11.1+.
+Orin/Xavier architectures are detected from the device tree; override with
+`VISION_ENCODERS_CUDA_ARCHITECTURES` when necessary. Inspect a selection without
+installing anything with `--dry-run --arch aarch64 --cuda-major 12 --cudnn-major 9`.
+
+JetPack 5 note: the released encoder
+artifacts use IR v8/opset 18 and do not require conversion.
+
+Offboard machines can build the unchanged `ImageTokens` interface and headers
+without an ONNX/CUDA installation using `-DVISION_ENCODERS_BUILD_RUNTIME=OFF`.
+Use separate build/install directories when switching that option. Native ARM
+build and inference validation is still required on the target JetPack release.
 
 ### build
 
@@ -54,6 +82,7 @@ JetPack 5 note: ORT 1.15 caps at ONNX IR v9 — downgrade the artifact header:
 colcon build --symlink-install --packages-select vision_encoders \
   --cmake-args -DONNXRUNTIME_ROOT=/path/to/onnxruntime  # optional override
 source install/setup.bash
+ros2 run vision_encoders cuda_provider_check
 ```
 
 ## run
@@ -102,8 +131,15 @@ Intrinsics are per-plane, in that plane's own pixels, so consumers need no
 camera config. Depth ships raw `u16` millimetres at 160×120 (38 KB, no encode —
 PNG-16 at full res costs 10–25 ms on the Orin) and `rs.align` runs only on the
 frames that carry one (`--depth-hz`). `encoder_node` takes the colour plane and
-ignores the rest; depth is [cpp_control's repose planner](../cpp_control/docs/planners/repose/planner.md).
+ignores the rest; depth is used by the
+[sledgehammer planner](https://github.com/drcl-deploy/sledgehammer/blob/main/docs/planner.md).
 The sim serves the same wire — `camera_depth: 1` in `unitree_mujoco/simulate/config.yaml`.
+
+Encoder and planner camera consumers share `camera_tcp.hpp`: connection and
+complete-frame reads have a two-second deadline, including partial frames.
+EOF or timeout reconnects on a new socket. Shutdown also interrupts connection,
+read and retry waits (checked every 100 ms), so a silent camera cannot hold
+Ctrl-C indefinitely. Image decoding and inference are unchanged.
 
 ### supported backbones:
 
