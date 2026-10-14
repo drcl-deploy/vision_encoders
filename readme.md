@@ -37,7 +37,8 @@ the ignored `.deps/` directory, and maintains the stable
 - **x86_64** downloads the checksum-pinned Microsoft ONNX Runtime 1.22 GPU SDK.
 - **aarch64 / Orin** detects the CUDA generation and builds the pinned ONNX
   Runtime release from source because Microsoft does not publish an aarch64
-  CUDA C++ archive. CUDA 11 selects ORT 1.15.1; CUDA 12 selects ORT 1.22.0.
+  CUDA C++ archive. CUDA 11/cuDNN 8 selects ORT 1.15.1, CUDA 12/cuDNN 8 selects
+  ORT 1.18.0, and CUDA 12/cuDNN 9 selects ORT 1.22.0. Other pairs fail early.
 - A validated prebuilt Jetson archive can be installed with
   `--archive <path> --sha256 <digest>`.
 
@@ -60,8 +61,20 @@ also loads the CUDA provider with `cuda_provider_check`; it does not silently
 fall back to CPU. Use `--dry-run` to inspect the ORT selection and `--help` for
 all options.
 
-JetPack 5 note: ORT 1.15 accepts ONNX IR through v9. The released encoder
+Source builds provision CMake 3.28.4 in a local tool venv and normalize installed
+headers to the binary SDK layout. `--jobs 2` (the default) bounds compilation.
+JetPack development headers and `nvcc` are required; ORT 1.22 needs GCC 11.1+.
+Orin/Xavier architectures are detected from the device tree; override with
+`VISION_ENCODERS_CUDA_ARCHITECTURES` when necessary. Inspect a selection without
+installing anything with `--dry-run --arch aarch64 --cuda-major 12 --cudnn-major 9`.
+
+JetPack 5 note: the released encoder
 artifacts use IR v8/opset 18 and do not require conversion.
+
+Offboard machines can build the unchanged `ImageTokens` interface and headers
+without an ONNX/CUDA installation using `-DVISION_ENCODERS_BUILD_RUNTIME=OFF`.
+Use separate build/install directories when switching that option. Native ARM
+build and inference validation is still required on the target JetPack release.
 
 ### build
 
