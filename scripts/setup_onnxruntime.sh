@@ -342,6 +342,18 @@ build_from_source() {
     "source checkout is ${actual_commit}, expected ${ort_commit}"
   git -C "${source_root}" submodule update --init --recursive --depth 1
 
+  # ORT 1.15.1 uses an undefined macro when flash attention is disabled (CUDA < 11.6).
+  if [[ "$ort_version" == 1.15.1 ]]; then
+    local compat_patch="${SCRIPT_DIR}/patches/onnxruntime-1.15.1-unused-parameter.patch"
+    if git -C "$source_root" apply --reverse --check "$compat_patch" >/dev/null 2>&1; then
+      note "ORT 1.15.1 CUDA compatibility patch already applied"
+    else
+      git -C "$source_root" apply --check "$compat_patch" || die "ORT 1.15.1 compatibility patch conflicts with local source"
+      git -C "$source_root" apply "$compat_patch"
+      note "applied ORT 1.15.1 CUDA compatibility patch"
+    fi
+  fi
+
   PATH="$tools_root/bin:$PATH" "${source_root}/build.sh" \
     --config Release \
     --build_dir "${build_root}" \

@@ -1,0 +1,9 @@
+diff --git a/onnxruntime/contrib_ops/cuda/bert/attention.cc b/onnxruntime/contrib_ops/cuda/bert/attention.cc
+--- a/onnxruntime/contrib_ops/cuda/bert/attention.cc
++++ b/onnxruntime/contrib_ops/cuda/bert/attention.cc
+@@ -165,4 +165,4 @@
+ #else
+   constexpr bool use_memory_efficient_attention = false;
+-  ORT_UNUSED_VARIABLE(is_mask_1d_key_seq_len_start);
++  ORT_UNUSED_PARAMETER(is_mask_1d_key_seq_len_start);
+ #endif
