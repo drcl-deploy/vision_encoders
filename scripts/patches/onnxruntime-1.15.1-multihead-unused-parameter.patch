@@ -1,0 +1,8 @@
+diff --git a/onnxruntime/contrib_ops/cuda/bert/multihead_attention.cc b/onnxruntime/contrib_ops/cuda/bert/multihead_attention.cc
+--- a/onnxruntime/contrib_ops/cuda/bert/multihead_attention.cc
++++ b/onnxruntime/contrib_ops/cuda/bert/multihead_attention.cc
+@@ -182,3 +182,4 @@
+ #else
+   constexpr bool use_memory_efficient_attention = false;
++  ORT_UNUSED_PARAMETER(is_mask_1d_key_seq_len_start);
+ #endif
